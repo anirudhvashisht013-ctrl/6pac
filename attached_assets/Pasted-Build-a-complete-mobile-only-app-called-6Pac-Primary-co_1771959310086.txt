@@ -1,0 +1,301 @@
+Build a complete mobile-only app called “6Pac”.
+
+Primary constraints:
+- Mobile-first UI only (phone screens)
+- Use shadcn/ui components and Tailwind styling conventions
+- Dark theme, clean cards, bottom navigation
+- Must work reliably on Replit free plan
+- Must not lose user data if the server sleeps or restarts
+- Remove/ignore document upload features (no PDF storage in MVP)
+- Provide “login once” experience (persistent session)
+
+Key decision for free reliability:
+- Store ALL user data locally in the browser using IndexedDB (preferred) with a small abstraction layer.
+- Authentication is local (email + password) stored locally with password hashing.
+- Session persistence is handled by storing a session token in localStorage; on app load, restore session and keep user logged in until they explicitly log out.
+
+Do NOT rely on server memory for persistence.
+Do NOT require external services (no Google OAuth, no paid DB, no paid storage).
+
+--------------------------------------------
+APP PURPOSE
+
+6Pac is a structured fitness system:
+1) Weekly planning (must plan week before starting)
+2) Daily logging (filled anytime during the day)
+3) Workout builder + gym buddy “player” (playlist with rest timers and auto-advance)
+4) Nutrition meal notes with calories + approx macros
+5) Progress analytics (trends + adherence)
+6) Body measurements analytics (twice a month)
+
+--------------------------------------------
+AUTH + ONBOARDING
+
+Auth screens:
+- Login
+- Sign up
+
+Local Auth model stored in IndexedDB:
+User:
+- id
+- email
+- passwordHash
+- fullName
+- dateOfBirth
+- sex
+- currentWeightKg
+- goalType ("lean" | "recomp" | "buffed")
+- createdAt
+
+Session:
+- sessionToken stored in localStorage (no expiry by default)
+- currentUserId stored in localStorage
+- auto-login on reload
+
+Onboarding (first login only):
+- Full name
+- DOB
+- Sex
+- Current weight
+- Goal (Lean Body / Body Recomp / Buffed Body)
+Save profile and route to Week tab (Planning mode).
+
+--------------------------------------------
+NAVIGATION
+
+Bottom tabs:
+1) Today
+2) Week
+3) Workouts
+4) Nutrition
+5) Progress
+
+--------------------------------------------
+DAILY LOGS (can be filled anytime)
+
+Metrics:
+- Weight
+- Sleep hours
+- Water intake (ml)
+- Steps
+- Supplements taken (yes/no)
+- Calories (derived from meals + optional manual adjustment)
+
+DailyLog (IndexedDB):
+- date (YYYY-MM-DD)
+- weightKg (number|null)
+- sleepHours (number|null)
+- waterMl (number|null)
+- steps (number|null)
+- supplementsTaken (boolean|null)
+- caloriesManual (number|null)
+- notes (string|null)
+- updatedAt
+
+Rules:
+- Can save multiple times/day
+- Past days editable
+- Future days not editable
+
+--------------------------------------------
+NUTRITION (meal logging + history)
+
+MealEntry (IndexedDB):
+- id
+- date
+- mealName (string)
+- notes (string|null)
+- calories (number|null)
+- proteinG (number|null)
+- carbsG (number|null)
+- fatG (number|null)
+- createdAt
+- updatedAt
+
+Daily calories shown in logs:
+- totalCalories = sum(meals.calories) + (caloriesManual || 0)
+
+--------------------------------------------
+WEEKLY TARGETS + PLANNING GATING (week starts Monday)
+
+WeeklyTarget (IndexedDB):
+- weekStartDate (YYYY-MM-DD)
+- dailyCaloriesTarget
+- dailyStepsTarget
+- dailyWaterMlTarget
+- weightGoalType ("lose"|"gain"|"maintain")
+- createdAt
+- updatedAt
+
+Completion rules:
+- Calories met if within ±5% of dailyCaloriesTarget
+- Steps met if >= dailyStepsTarget
+- Water met if >= dailyWaterMlTarget
+Star ⭐ on a day if Calories + Steps + Water are met.
+
+Week schedule planning:
+WeekSchedule (IndexedDB):
+- weekStartDate
+- days: PlannedDay[]
+
+PlannedDay:
+- date
+- status: "planned_workout" | "rest" | "unplanned"
+- workoutTemplateId (string|null)
+
+Week is READY only if all Mon–Sun are not "unplanned".
+If week not READY:
+- Show banner “Plan this week to start workouts”
+- Disable starting workouts for that week
+
+Week tab has two modes:
+A) Planning mode (DEFAULT)
+- can ONLY assign/remove workouts or mark rest for days
+- cannot start workouts
+B) Execute mode
+- only enabled when week READY
+- can start workouts for days
+- can edit logs for current/past days
+
+Week selector UI:
+- Monthly strip with week slots (Month + Week number)
+- current week highlighted
+- tap slot loads that week
+
+Week view layout order:
+1) Weekly target widgets (editable)
+2) Daily cards Mon–Sun (optionally hide Sunday if rest, but keep gating consistent)
+   Each card shows:
+   - day label
+   - workout name/rest/unplanned
+   - indicators: C, S, W (hollow = not logged, grey = logged not met, green = met)
+   - star if all met
+3) Weekly stats section:
+   - adherence % per metric
+   - averages vs targets
+   - weekly weight change (earliest vs latest weight in that week)
+   - workouts planned vs completed
+
+--------------------------------------------
+WORKOUTS (templates with mixed cardio + gym + rest blocks)
+
+WorkoutTemplate (IndexedDB):
+- id
+- name
+- blocks: WorkoutBlock[]
+- createdAt
+- updatedAt
+
+WorkoutBlock types in a single ordered list (mixed allowed):
+1) Gym block:
+- type: "gym"
+- exerciseName
+- sets (number)
+- repsOption (dropdown; first option is "Until Failure"; then 1..30)
+- referenceVideoUrls (0..3)
+- notes (string|null)
+
+2) Cardio block:
+- type: "cardio"
+- cardioName
+- minutes (number)
+- notes (string|null)
+
+3) Rest block:
+- type: "rest"
+- seconds (number)
+- label (optional)
+
+Workout template editor:
+- Add block (choose type)
+- Reorder blocks (long press drag)
+- Edit/delete blocks
+- This allows: treadmill → gym exercises → cycling → etc.
+
+--------------------------------------------
+WORKOUT PLAYER (gym buddy “playlist” execution)
+
+Starting a workout creates a WorkoutSession (IndexedDB):
+WorkoutSession:
+- id
+- date
+- workoutTemplateId
+- workoutNameSnapshot
+- startedAt
+- endedAt
+- completed (boolean)
+- per-block performance
+
+Player behavior:
+- Show current block + next block preview
+- Gym block:
+  - show set rows with inputs for weight and reps
+  - checkbox for each set
+  - video links accessible
+  - “Complete Exercise” completes the block and moves forward
+- Rest block:
+  - timer auto-starts when reached
+  - when timer ends, auto-advance to next block automatically
+- Cardio block:
+  - simple timer or “minutes completed” input
+  - complete to advance
+- End workout:
+  - summary screen
+  - save session
+  - update week completion stats
+
+--------------------------------------------
+BODY MEASUREMENTS (twice a month)
+
+BodyMeasurementEntry (IndexedDB):
+- id
+- date
+- waist
+- chest
+- shoulders
+- armsR
+- armsL
+- thighR
+- thighL
+- bicepsR
+- bicepsL
+- bodyFatPercent
+- notes (optional)
+
+Progress analytics must include charts/trends for measurements over time.
+
+--------------------------------------------
+PROGRESS TAB (analytics)
+
+Include:
+- Weight trend chart
+- Weekly adherence analytics (C/S/W)
+- Workouts planned vs completed per week
+- Measurements trends
+- Simple summaries (best week, averages)
+
+--------------------------------------------
+SEED DATA (first run)
+
+Seed:
+- current week target
+- a week schedule with at least one unplanned day to demonstrate gating
+- 3 workout templates with mixed blocks
+- 3–4 daily logs with partial entries
+- some meals
+
+--------------------------------------------
+IMPLEMENTATION NOTES
+
+- Make an IndexedDB storage layer with repositories:
+  usersRepo, sessionRepo, logsRepo, targetsRepo, scheduleRepo, workoutsRepo, mealsRepo, sessionsRepo, measurementsRepo.
+- Use localStorage only for sessionToken/currentUserId.
+- On app start:
+  - if session exists, auto-login
+  - if no session, show auth
+  - if logged in but profile incomplete, show onboarding
+
+Deliver:
+- Working app with all screens
+- Persistent local storage
+- README documenting rules (week starts Monday, calorie met rule ±5%, week gating definition, star rule)

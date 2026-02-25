@@ -5,6 +5,7 @@ import {
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
+import { router } from 'expo-router';
 import { C } from '@/constants/colors';
 import { useAuth } from '@/context/AuthContext';
 
@@ -26,13 +27,15 @@ const STEPS: Step[] = ['name', 'dob', 'sex', 'weight', 'goal'];
 
 export default function OnboardingScreen() {
   const insets = useSafeAreaInsets();
-  const { updateUser } = useAuth();
+  const { user, updateUser } = useAuth();
+
   const [step, setStep] = useState<Step>('name');
   const [fullName, setFullName] = useState('');
   const [dob, setDob] = useState('');
   const [sex, setSex] = useState<'male' | 'female' | 'other'>('male');
   const [weight, setWeight] = useState('');
   const [goal, setGoal] = useState<'lean' | 'recomp' | 'buffed'>('recomp');
+
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
 
@@ -46,40 +49,12 @@ export default function OnboardingScreen() {
     return !isNaN(d.getTime()) && d < new Date();
   };
 
-  const goNext = () => {
-    setError('');
-    if (step === 'name') {
-      if (!fullName.trim()) { setError('Please enter your name'); return; }
-      setStep('dob');
-    } else if (step === 'dob') {
-      if (!validateDob(dob)) { setError('Enter a valid date (YYYY-MM-DD)'); return; }
-      setStep('sex');
-    } else if (step === 'sex') {
-      setStep('weight');
-    } else if (step === 'weight') {
-      const w = parseFloat(weight);
-      if (!weight || isNaN(w) || w < 30 || w > 300) { setError('Enter a valid weight (30–300 kg)'); return; }
-      setStep('goal');
-    } else if (step === 'goal') {
-      handleFinish();
-    }
-  };
-
-  const handleFinish = async () => {
-    setLoading(true);
-    try {
-      await updateUser({
-        fullName: fullName.trim(),
-        dateOfBirth: dob,
-        sex,
-        currentWeightKg: parseFloat(weight),
-        goalType: goal,
-      });
-    } catch (e: any) {
-      setError(e.message || 'Something went wrong');
-    } finally {
-      setLoading(false);
-    }
+  const formatDob = (text: string) => {
+    const digits = text.replace(/\D/g, '');
+    let formatted = digits;
+    if (digits.length > 4) formatted = digits.slice(0, 4) + '-' + digits.slice(4);
+    if (digits.length > 6) formatted = digits.slice(0, 4) + '-' + digits.slice(4, 6) + '-' + digits.slice(6, 8);
+    return formatted;
   };
 
   const goBack = () => {
@@ -88,12 +63,79 @@ export default function OnboardingScreen() {
     if (idx > 0) setStep(STEPS[idx - 1]);
   };
 
-  const formatDob = (text: string) => {
-    const digits = text.replace(/\D/g, '');
-    let formatted = digits;
-    if (digits.length > 4) formatted = digits.slice(0, 4) + '-' + digits.slice(4);
-    if (digits.length > 6) formatted = digits.slice(0, 4) + '-' + digits.slice(4, 6) + '-' + digits.slice(6, 8);
-    return formatted;
+  const goNext = () => {
+    setError('');
+
+    if (step === 'name') {
+      if (!fullName.trim()) { setError('Please enter your name'); return; }
+      setStep('dob');
+      return;
+    }
+
+    if (step === 'dob') {
+      if (!validateDob(dob)) { setError('Enter a valid date (YYYY-MM-DD)'); return; }
+      setStep('sex');
+      return;
+    }
+
+    if (step === 'sex') {
+      setStep('weight');
+      return;
+    }
+
+    if (step === 'weight') {
+      const w = parseFloat(weight);
+      if (!weight || Number.isNaN(w) || w < 30 || w > 300) {
+        setError('Enter a valid weight (30–300 kg)');
+        return;
+      }
+      setStep('goal');
+      return;
+    }
+
+    handleFinish();
+  };
+
+  const handleFinish = async () => {
+    setLoading(true);
+    setError('');
+
+    try {
+      const w = parseFloat(weight);
+
+      if (!fullName.trim()) {
+        setError('Please enter your name');
+        return;
+      }
+      if (!validateDob(dob)) {
+        setError('Enter a valid date (YYYY-MM-DD)');
+        return;
+      }
+      if (Number.isNaN(w) || w < 30 || w > 300) {
+        setError('Enter a valid weight (30–300 kg)');
+        return;
+      }
+      if (!user?.id) {
+        setError('Session missing. Please login again.');
+        return;
+      }
+
+      // ✅ Single source of truth: updateUser writes Firestore + onboardingDone
+      await updateUser({
+        fullName: fullName.trim(),
+        dateOfBirth: dob,
+        sex,
+        currentWeightKg: w,
+        goalType: goal,
+      });
+
+      // ✅ Go to tabs home
+      router.replace('/(tabs)');
+    } catch (e: any) {
+      setError(e?.message || 'Something went wrong');
+    } finally {
+      setLoading(false);
+    }
   };
 
   return (

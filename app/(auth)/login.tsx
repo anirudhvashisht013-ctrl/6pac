@@ -1,34 +1,73 @@
 import React, { useState } from 'react';
 import {
-  View, Text, TextInput, Pressable, StyleSheet,
-  KeyboardAvoidingView, Platform, ScrollView, ActivityIndicator,
+  View,
+  Text,
+  TextInput,
+  Pressable,
+  StyleSheet,
+  KeyboardAvoidingView,
+  Platform,
+  ScrollView,
+  ActivityIndicator,
 } from 'react-native';
 import { router } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { C } from '@/constants/colors';
 import { useAuth } from '@/context/AuthContext';
+import { ensureUserProfile } from '@/lib/userProfile';
 
 export default function LoginScreen() {
   const insets = useSafeAreaInsets();
   const { login } = useAuth();
+
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
 
+  const mapFirebaseError = (code: string) => {
+    switch (code) {
+      case 'auth/invalid-credential':
+      case 'auth/wrong-password':
+        return 'Invalid email or password';
+      case 'auth/user-not-found':
+        return 'No account found for this email';
+      case 'auth/too-many-requests':
+        return 'Too many attempts. Try again later';
+      case 'auth/network-request-failed':
+        return 'Network error. Check your internet connection';
+      default:
+        return 'Login failed. Please try again';
+    }
+  };
+
   const handleLogin = async () => {
     if (!email.trim() || !password) {
       setError('Please fill in all fields');
       return;
     }
+
     setLoading(true);
     setError('');
+
     try {
-      await login(email.trim(), password);
+      const firebaseUser = await login(email.trim(), password);
+
+      if (!firebaseUser?.uid) {
+        setError('Session error. Please try again.');
+        return;
+      }
+
+      // Ensure Firestore profile exists
+      await ensureUserProfile(firebaseUser.uid, email.trim());
+
+      // Gate (index.tsx) will route correctly
+      router.replace('/');
+
     } catch (e: any) {
-      setError(e.message || 'Login failed');
+      setError(mapFirebaseError(e?.code));
     } finally {
       setLoading(false);
     }
@@ -40,7 +79,10 @@ export default function LoginScreen() {
       behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
     >
       <ScrollView
-        contentContainerStyle={[styles.container, { paddingTop: insets.top + 40, paddingBottom: insets.bottom + 24 }]}
+        contentContainerStyle={[
+          styles.container,
+          { paddingTop: insets.top + 40, paddingBottom: insets.bottom + 24 },
+        ]}
         keyboardShouldPersistTaps="handled"
       >
         <View style={styles.header}>
@@ -63,7 +105,12 @@ export default function LoginScreen() {
           <View style={styles.inputGroup}>
             <Text style={styles.label}>Email</Text>
             <View style={styles.inputWrap}>
-              <Ionicons name="mail-outline" size={18} color={C.textMuted} style={styles.inputIcon} />
+              <Ionicons
+                name="mail-outline"
+                size={18}
+                color={C.textMuted}
+                style={styles.inputIcon}
+              />
               <TextInput
                 style={styles.input}
                 value={email}
@@ -80,7 +127,12 @@ export default function LoginScreen() {
           <View style={styles.inputGroup}>
             <Text style={styles.label}>Password</Text>
             <View style={styles.inputWrap}>
-              <Ionicons name="lock-closed-outline" size={18} color={C.textMuted} style={styles.inputIcon} />
+              <Ionicons
+                name="lock-closed-outline"
+                size={18}
+                color={C.textMuted}
+                style={styles.inputIcon}
+              />
               <TextInput
                 style={styles.input}
                 value={password}
@@ -90,14 +142,24 @@ export default function LoginScreen() {
                 secureTextEntry={!showPassword}
                 autoCapitalize="none"
               />
-              <Pressable onPress={() => setShowPassword(!showPassword)} style={styles.eyeBtn}>
-                <Ionicons name={showPassword ? 'eye' : 'eye-off'} size={18} color={C.textMuted} />
+              <Pressable
+                onPress={() => setShowPassword(!showPassword)}
+                style={styles.eyeBtn}
+              >
+                <Ionicons
+                  name={showPassword ? 'eye' : 'eye-off'}
+                  size={18}
+                  color={C.textMuted}
+                />
               </Pressable>
             </View>
           </View>
 
           <Pressable
-            style={({ pressed }) => [styles.primaryBtn, { opacity: pressed || loading ? 0.85 : 1 }]}
+            style={({ pressed }) => [
+              styles.primaryBtn,
+              { opacity: pressed || loading ? 0.85 : 1 },
+            ]}
             onPress={handleLogin}
             disabled={loading}
           >
@@ -115,7 +177,10 @@ export default function LoginScreen() {
           </View>
 
           <Pressable
-            style={({ pressed }) => [styles.secondaryBtn, { opacity: pressed ? 0.8 : 1 }]}
+            style={({ pressed }) => [
+              styles.secondaryBtn,
+              { opacity: pressed ? 0.8 : 1 },
+            ]}
             onPress={() => router.push('/(auth)/signup')}
           >
             <Text style={styles.secondaryBtnText}>Create account</Text>
@@ -127,14 +192,8 @@ export default function LoginScreen() {
 }
 
 const styles = StyleSheet.create({
-  container: {
-    flexGrow: 1,
-    paddingHorizontal: 24,
-  },
-  header: {
-    alignItems: 'center',
-    marginBottom: 48,
-  },
+  container: { flexGrow: 1, paddingHorizontal: 24 },
+  header: { alignItems: 'center', marginBottom: 48 },
   logoContainer: {
     width: 80,
     height: 80,
@@ -157,14 +216,11 @@ const styles = StyleSheet.create({
     letterSpacing: 2,
     textTransform: 'uppercase',
   },
-  form: {
-    gap: 16,
-  },
+  form: { gap: 16 },
   title: {
     fontFamily: 'Outfit_700Bold',
     fontSize: 28,
     color: C.text,
-    marginBottom: 4,
   },
   errorBox: {
     flexDirection: 'row',
@@ -182,9 +238,7 @@ const styles = StyleSheet.create({
     color: C.error,
     flex: 1,
   },
-  inputGroup: {
-    gap: 8,
-  },
+  inputGroup: { gap: 8 },
   label: {
     fontFamily: 'Outfit_500Medium',
     fontSize: 14,
@@ -200,18 +254,14 @@ const styles = StyleSheet.create({
     paddingHorizontal: 14,
     height: 52,
   },
-  inputIcon: {
-    marginRight: 10,
-  },
+  inputIcon: { marginRight: 10 },
   input: {
     flex: 1,
     fontFamily: 'Outfit_400Regular',
     fontSize: 16,
     color: C.text,
   },
-  eyeBtn: {
-    padding: 4,
-  },
+  eyeBtn: { padding: 4 },
   primaryBtn: {
     height: 52,
     borderRadius: 12,
@@ -230,11 +280,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     gap: 12,
   },
-  dividerLine: {
-    flex: 1,
-    height: 1,
-    backgroundColor: C.border,
-  },
+  dividerLine: { flex: 1, height: 1, backgroundColor: C.border },
   dividerText: {
     fontFamily: 'Outfit_400Regular',
     fontSize: 14,

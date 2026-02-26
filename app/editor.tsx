@@ -1,3 +1,4 @@
+// app/editor.tsx
 import React, { useState, useEffect } from 'react';
 import {
   View, Text, ScrollView, StyleSheet, Pressable,
@@ -26,6 +27,9 @@ const DEFAULT_CARDIO: Partial<WorkoutBlock> = {
 const DEFAULT_REST: Partial<WorkoutBlock> = {
   type: 'rest', seconds: 60, label: 'Rest',
 };
+
+// ✅ normalize helper (prevents duplicates even if spacing/case differs)
+const normalizeUrl = (url: string) => url.trim().replace(/\s+/g, '').toLowerCase();
 
 function BlockCard({
   block, idx, total, onEdit, onDelete, onMoveUp, onMoveDown,
@@ -106,6 +110,9 @@ export default function EditorScreen() {
   const [blockDraft, setBlockDraft] = useState<Partial<WorkoutBlock>>({});
   const [showRepsModal, setShowRepsModal] = useState(false);
 
+  // ✅ local input just for adding a link
+  const [videoUrlDraft, setVideoUrlDraft] = useState('');
+
   useEffect(() => {
     if (isNew || !user) { setLoading(false); return; }
     workoutsRepo.getById(user.id, id).then(t => {
@@ -133,6 +140,7 @@ export default function EditorScreen() {
   const openAddBlock = (type: BlockType) => {
     const draft = type === 'gym' ? { ...DEFAULT_GYM } : type === 'cardio' ? { ...DEFAULT_CARDIO } : { ...DEFAULT_REST };
     setBlockDraft({ ...draft, id: Crypto.randomUUID() });
+    setVideoUrlDraft('');
     setEditingBlock(null);
     setEditingBlockIdx(null);
     setShowAddModal(false);
@@ -141,6 +149,7 @@ export default function EditorScreen() {
 
   const openEditBlock = (block: WorkoutBlock, idx: number) => {
     setBlockDraft({ ...block });
+    setVideoUrlDraft('');
     setEditingBlock(block);
     setEditingBlockIdx(idx);
     setShowEditModal(true);
@@ -148,6 +157,12 @@ export default function EditorScreen() {
 
   const saveBlock = () => {
     if (!blockDraft.id) return;
+
+    // safety: ensure gym has array
+    if (blockDraft.type === 'gym' && !Array.isArray(blockDraft.referenceVideoUrls)) {
+      setBlockDraft(d => ({ ...d, referenceVideoUrls: [] }));
+    }
+
     const block = blockDraft as WorkoutBlock;
     if (editingBlockIdx !== null) {
       const newBlocks = [...blocks];
@@ -157,6 +172,7 @@ export default function EditorScreen() {
       setBlocks(prev => [...prev, block]);
     }
     setShowEditModal(false);
+    setVideoUrlDraft('');
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
   };
 
@@ -172,6 +188,45 @@ export default function EditorScreen() {
     const targetIdx = dir === 'up' ? idx - 1 : idx + 1;
     [newBlocks[idx], newBlocks[targetIdx]] = [newBlocks[targetIdx], newBlocks[idx]];
     setBlocks(newBlocks);
+  };
+
+  // ✅ Add link handler with duplicate prevention + limit
+  const addReferenceVideoUrl = () => {
+    const url = videoUrlDraft.trim();
+    if (!url) return;
+
+    const current = (blockDraft.referenceVideoUrls || []) as string[];
+    if (current.length >= 3) {
+      Alert.alert('Limit reached', 'You can add up to 3 reference videos.');
+      return;
+    }
+
+    const existingNorm = current.map(normalizeUrl);
+    const nextNorm = normalizeUrl(url);
+
+    if (existingNorm.includes(nextNorm)) {
+      Alert.alert(
+        'Duplicate video 😄',
+        "Can't add the same video twice. Do you love the channel so much? :D"
+      );
+      return;
+    }
+
+    setBlockDraft(d => ({
+      ...d,
+      referenceVideoUrls: [...((d.referenceVideoUrls || []) as string[]), url],
+    }));
+    setVideoUrlDraft('');
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+  };
+
+  const removeReferenceVideoUrl = (idx: number) => {
+    const current = (blockDraft.referenceVideoUrls || []) as string[];
+    setBlockDraft(d => ({
+      ...d,
+      referenceVideoUrls: current.filter((_, i) => i !== idx),
+    }));
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
   };
 
   if (loading) {
@@ -291,6 +346,7 @@ export default function EditorScreen() {
                         autoFocus
                       />
                     </View>
+
                     <View style={styles.formRow}>
                       <View style={[styles.formField, { flex: 1 }]}>
                         <Text style={styles.formLabel}>Sets</Text>
@@ -311,6 +367,7 @@ export default function EditorScreen() {
                         </Pressable>
                       </View>
                     </View>
+
                     <View style={styles.formField}>
                       <Text style={styles.formLabel}>Notes (optional)</Text>
                       <TextInput
@@ -320,6 +377,47 @@ export default function EditorScreen() {
                         placeholder="Coaching cues..."
                         placeholderTextColor={C.textMuted}
                       />
+                    </View>
+
+                    {/* ✅ Video links UI */}
+                    <View style={styles.formField}>
+                      <Text style={styles.formLabel}>Reference videos (optional)</Text>
+
+                      <View style={styles.videoAddRow}>
+                        <TextInput
+                          style={[styles.formInput, { flex: 1 }]}
+                          value={videoUrlDraft}
+                          onChangeText={setVideoUrlDraft}
+                          placeholder="Paste video link"
+                          placeholderTextColor={C.textMuted}
+                          autoCapitalize="none"
+                          autoCorrect={false}
+                        />
+                        <Pressable
+                          style={({ pressed }) => [styles.videoAddBtn, pressed && { opacity: 0.85 }]}
+                          onPress={addReferenceVideoUrl}
+                        >
+                          <Ionicons name="add" size={18} color={C.bg} />
+                        </Pressable>
+                      </View>
+
+                      <Text style={styles.videoHint}>
+                        Up to 3 links. Tip: keep 1 “form”, 1 “setup”, 1 “common mistakes”.
+                      </Text>
+
+                      {((blockDraft.referenceVideoUrls || []) as string[]).length > 0 && (
+                        <View style={styles.videoList}>
+                          {((blockDraft.referenceVideoUrls || []) as string[]).map((u, idx) => (
+                            <View key={`${u}-${idx}`} style={styles.videoChip}>
+                              <Ionicons name="link-outline" size={14} color={C.textMuted} />
+                              <Text style={styles.videoChipText} numberOfLines={1}>{u}</Text>
+                              <Pressable onPress={() => removeReferenceVideoUrl(idx)} style={styles.videoChipRemove}>
+                                <Ionicons name="close" size={16} color={C.error} />
+                              </Pressable>
+                            </View>
+                          ))}
+                        </View>
+                      )}
                     </View>
                   </>
                 )}
@@ -542,4 +640,20 @@ const styles = StyleSheet.create({
   repsOptionActive: { backgroundColor: C.primaryBg },
   repsOptionText: { fontFamily: 'Outfit_400Regular', fontSize: 16, color: C.textSecondary },
   repsOptionTextActive: { color: C.primary, fontFamily: 'Outfit_600SemiBold' },
+
+  // ✅ new styles for video links UI
+  videoAddRow: { flexDirection: 'row', alignItems: 'center', gap: 10 },
+  videoAddBtn: {
+    width: 48, height: 48, borderRadius: 12,
+    backgroundColor: C.primary, alignItems: 'center', justifyContent: 'center',
+  },
+  videoHint: { fontFamily: 'Outfit_400Regular', fontSize: 12, color: C.textMuted },
+  videoList: { gap: 8, marginTop: 6 },
+  videoChip: {
+    flexDirection: 'row', alignItems: 'center', gap: 10,
+    backgroundColor: C.surface2, borderRadius: 12, borderWidth: 1, borderColor: C.border,
+    paddingHorizontal: 12, paddingVertical: 10,
+  },
+  videoChipText: { flex: 1, fontFamily: 'Outfit_400Regular', fontSize: 13, color: C.textSecondary },
+  videoChipRemove: { width: 28, height: 28, alignItems: 'center', justifyContent: 'center' },
 });

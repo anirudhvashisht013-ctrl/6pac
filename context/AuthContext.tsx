@@ -14,7 +14,7 @@ import {
   type User as FirebaseUser,
 } from "firebase/auth";
 import { auth } from "@/lib/firebase";
-import { markOnboardingDone } from "@/lib/userProfile";
+import { ensureUserProfile, getUserProfile, markOnboardingDone } from "@/lib/userProfile";
 
 type AppUser = {
   id: string; // Firebase uid
@@ -29,15 +29,26 @@ type OnboardingUpdates = {
   goalType: "lean" | "recomp" | "buffed";
 };
 
-interface AuthContextValue {
+export interface AuthContextValue {
   user: AppUser | null;
+
+  /**
+   * True while Firebase auth restores and (if logged-in) profile is fetched.
+   */
   isLoading: boolean;
+
+  /**
+   * Derived from Firestore users/{uid}.onboardingDone.
+   */
+  isProfileComplete: boolean;
 
   login: (email: string, password: string) => Promise<FirebaseUser>;
   signUp: (email: string, password: string) => Promise<FirebaseUser>;
   logout: () => Promise<void>;
 
-  // ✅ keep same name as your old app so onboarding doesn't break
+  /**
+   * Called from onboarding screen to finalize onboarding.
+   */
   updateUser: (updates: OnboardingUpdates) => Promise<void>;
 }
 
@@ -46,55 +57,114 @@ const AuthContext = createContext<AuthContextValue | null>(null);
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<AppUser | null>(null);
   const [isLoading, setIsLoading] = useState(true);
+  const [isProfileComplete, setIsProfileComplete] = useState(false);
 
   useEffect(() => {
-    const unsub = onAuthStateChanged(auth, (fbUser) => {
-      if (fbUser) {
-        setUser({
-          id: fbUser.uid,
-          email: fbUser.email || "",
-        });
-      } else {
+    let cancelled = false;
+
+    const unsub = onAuthStateChanged(auth, async (fbUser) => {
+      if (cancelled) return;
+
+      setIsLoading(true);
+
+      if (!fbUser) {
         setUser(null);
+        setIsProfileComplete(false);
+        setIsLoading(false);
+        return;
       }
-      setIsLoading(false);
+
+      const uid = fbUser.uid;
+      const email = (fbUser.email || "").trim().toLowerCase();
+
+      setUser({ id: uid, email });
+
+      try {
+        // Make sure /users/{uid} exists (non-destructive)
+        if (email) {
+          await ensureUserProfile(uid, email);
+        }
+
+        // Read profile to determine onboardingDone
+        const profile = await getUserProfile(uid);
+        setIsProfileComplete(!!profile?.onboardingDone);
+      } catch {
+        // If Firestore fails, do not assume complete
+        setIsProfileComplete(false);
+      } finally {
+        setIsLoading(false);
+      }
     });
 
-    return () => unsub();
+    return () => {
+      cancelled = true;
+      unsub();
+    };
   }, []);
 
   const login = async (email: string, password: string): Promise<FirebaseUser> => {
-    const cred = await signInWithEmailAndPassword(auth, email, password);
+    const cleanEmail = email.trim().toLowerCase();
+    const cred = await signInWithEmailAndPassword(auth, cleanEmail, password);
+
+    const uid = cred.user.uid;
+    const userEmail = (cred.user.email || cleanEmail).trim().toLowerCase();
+
+    // Ensure profile doc exists
+    await ensureUserProfile(uid, userEmail);
+
+    // Update completeness right away
+    try {
+      const profile = await getUserProfile(uid);
+      setIsProfileComplete(!!profile?.onboardingDone);
+    } catch {
+      setIsProfileComplete(false);
+    }
+
     return cred.user;
   };
 
   const signUp = async (email: string, password: string): Promise<FirebaseUser> => {
-    const cred = await createUserWithEmailAndPassword(auth, email, password);
+    const cleanEmail = email.trim().toLowerCase();
+    const cred = await createUserWithEmailAndPassword(auth, cleanEmail, password);
+
+    const uid = cred.user.uid;
+    const userEmail = (cred.user.email || cleanEmail).trim().toLowerCase();
+
+    await ensureUserProfile(uid, userEmail);
+
+    // New user hasn’t completed onboarding yet
+    setIsProfileComplete(false);
+
     return cred.user;
   };
 
   const logout = async () => {
     await signOut(auth);
+    setUser(null);
+    setIsProfileComplete(false);
   };
 
-  // ✅ Called by onboarding "Finish"
   const updateUser = async (updates: OnboardingUpdates) => {
-    if (!user?.id) {
-      throw new Error("Session missing. Please login again.");
-    }
-    await markOnboardingDone(user.id, updates);
+    const uid = user?.id;
+    if (!uid) throw new Error("Session missing. Please login again.");
+
+    await markOnboardingDone(uid, updates);
+
+    // Immediately reflect completion in context
+    setIsProfileComplete(true);
   };
 
   const value = useMemo<AuthContextValue>(
     () => ({
       user,
       isLoading,
+      isProfileComplete,
       login,
       signUp,
       logout,
       updateUser,
     }),
-    [user, isLoading]
+    [user, isLoading, isProfileComplete]
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

@@ -1,5 +1,4 @@
 // lib/models.ts
-
 export type ISODate = `${number}-${number}-${number}`; // "YYYY-MM-DD"
 
 export type Sex = "male" | "female" | "other";
@@ -65,12 +64,20 @@ export type WorkoutSession = {
   completed: boolean;
   durationMin: number | null;
 
-  // keep this flexible; we can add exercise details later
   updatedAt?: any;
 };
 
 export type BodyMeasurementEntry = {
-  date: ISODate; // using date as id (1 check-in per day). Change if needed.
+  /**
+   * IMPORTANT:
+   * We treat `date` as the "scheduled slot date" (ISODate).
+   * The actual time you logged is stored in `loggedAt`.
+   */
+  date: ISODate;
+
+  schemaVersion?: 1; 
+
+  // values are stored in cm (we display/input inches in UI)
   waist: number | null;
   chest: number | null;
   shoulders: number | null;
@@ -80,7 +87,12 @@ export type BodyMeasurementEntry = {
   thighL: number | null;
   bicepsR: number | null;
   bicepsL: number | null;
+
   bodyFatPercent: number | null;
   notes: string | null;
-  createdAt?: any;
+
+  // timestamps
+  createdAt?: any;   // legacy / initial
+  loggedAt?: string; // ISO timestamp when user logged it
+  updatedAt?: any;
 };

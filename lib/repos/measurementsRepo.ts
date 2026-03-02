@@ -8,6 +8,7 @@ import {
   getDocs,
   query,
   where,
+  deleteDoc,
   serverTimestamp,
 } from "firebase/firestore";
 import type { BodyMeasurementEntry, ISODate } from "@/lib/models";
@@ -19,6 +20,13 @@ export const measurementsRepo = {
   async getByDate(uid: string, date: ISODate): Promise<BodyMeasurementEntry | null> {
     const snap = await getDoc(ref(uid, date));
     return snap.exists() ? (snap.data() as BodyMeasurementEntry) : null;
+  },
+
+  async getAll(uid: string): Promise<BodyMeasurementEntry[]> {
+    const snaps = await getDocs(col(uid));
+    return snaps.docs
+      .map((d) => d.data() as BodyMeasurementEntry)
+      .sort((a, b) => a.date.localeCompare(b.date));
   },
 
   async getRange(uid: string, start: ISODate, end: ISODate): Promise<BodyMeasurementEntry[]> {
@@ -35,8 +43,14 @@ export const measurementsRepo = {
       {
         ...entry,
         createdAt: entry.createdAt ?? serverTimestamp(),
+        loggedAt: entry.loggedAt ?? serverTimestamp(),
+        updatedAt: serverTimestamp(),
       },
       { merge: true }
     );
+  },
+
+  async deleteByDate(uid: string, date: ISODate): Promise<void> {
+    await deleteDoc(ref(uid, date));
   },
 };

@@ -1,10 +1,5 @@
 import { db } from "@/lib/firebase";
-import {
-  doc,
-  getDoc,
-  setDoc,
-  serverTimestamp,
-} from "firebase/firestore";
+import { doc, getDoc, setDoc, serverTimestamp } from "firebase/firestore";
 
 export type UserProfileDoc = {
   uid: string;
@@ -70,6 +65,27 @@ export async function markOnboardingDone(
       sex: data.sex,
       currentWeightKg: data.currentWeightKg,
       goalType: data.goalType,
+      updatedAt: serverTimestamp(),
+    } satisfies Partial<UserProfileDoc>,
+    { merge: true }
+  );
+}
+
+/**
+ * Generic profile updater (merge).
+ * Use this for small edits like fullName without touching onboarding fields.
+ */
+export async function updateUserProfile(
+  uid: string,
+  updates: Partial<Pick<UserProfileDoc, "fullName" | "dateOfBirth" | "sex" | "currentWeightKg" | "goalType">>
+): Promise<void> {
+  const ref = userDocRef(uid);
+
+  await setDoc(
+    ref,
+    {
+      uid,
+      ...updates,
       updatedAt: serverTimestamp(),
     } satisfies Partial<UserProfileDoc>,
     { merge: true }

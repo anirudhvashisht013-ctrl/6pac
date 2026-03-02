@@ -1,3 +1,4 @@
+// app/_layout.tsx
 import { QueryClientProvider } from "@tanstack/react-query";
 import { Stack, router } from "expo-router";
 import * as SplashScreen from "expo-splash-screen";
@@ -41,6 +42,9 @@ function RootLayoutNav() {
       <Stack.Screen name="player" options={{ presentation: "fullScreenModal", headerShown: false }} />
       <Stack.Screen name="editor" options={{ presentation: "modal", headerShown: false }} />
       <Stack.Screen name="measurements" options={{ presentation: "modal", headerShown: false }} />
+      <Stack.Screen name="profile-progress" options={{ headerShown: false }} />
+      <Stack.Screen name="profile-measurements" options={{ headerShown: false }} />
+      <Stack.Screen name="edit-profile" options={{ presentation: "modal", headerShown: false }} />
     </Stack>
   );
 }

@@ -12,6 +12,10 @@ export type UserProfileDoc = {
   goalType?: "lean" | "recomp" | "buffed";
   createdAt?: any;
   updatedAt?: any;
+
+  // streak tracking
+  currentStreakDays?: number;
+  maxStreakDays?: number;
 };
 
 const userDocRef = (uid: string) => doc(db, "users", uid);
@@ -77,7 +81,7 @@ export async function markOnboardingDone(
  */
 export async function updateUserProfile(
   uid: string,
-  updates: Partial<Pick<UserProfileDoc, "fullName" | "dateOfBirth" | "sex" | "currentWeightKg" | "goalType">>
+  updates: Partial<UserProfileDoc>
 ): Promise<void> {
   const ref = userDocRef(uid);
 

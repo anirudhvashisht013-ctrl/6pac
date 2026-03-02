@@ -2,16 +2,22 @@ import React, { useState, useCallback } from 'react';
 import {
   View, Text, ScrollView, StyleSheet, Pressable,
   TextInput, Switch, ActivityIndicator, RefreshControl, Platform,
+  Modal,
 } from 'react-native';
 import { useFocusEffect } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import * as Haptics from 'expo-haptics';
 import { C } from '@/constants/colors';
+import { S } from '@/constants/spacing';
 import { useAuth } from '@/context/AuthContext';
-import { logsRepo, mealsRepo, targetsRepo } from '@/lib/storage';
+import { Streak } from '@/components/Streak';
+import { logsRepo, mealsRepo, targetsRepo, usersRepo } from '@/lib/storage';
 import { todayYMD, formatDateLong, getMondayYMD } from '@/lib/dates';
+import { generateWindow, DayWWSS, computeMaxStreakFromLogs, computeCurrentStreak } from '@/lib/streak';
+import { getUserProfile, updateUserProfile } from '@/lib/userProfile';
 import type { DailyLog, MealEntry, WeeklyTarget } from '@/lib/types';
+import type { ISODate } from '@/lib/models';
 
 function MetricCard({
   icon, label, value, unit, onPress,
@@ -41,17 +47,39 @@ export default function TodayScreen() {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
 
+  // streak data for the top-of-screen UI
+  const [streakData, setStreakData] = useState<DayWWSS[]>([]);
+
+  // profile fetched from Firestore (used for account start date etc.)
+  const [profile, setProfile] = useState<any | null>(null);
+
   const [editField, setEditField] = useState<string | null>(null);
   const [editValue, setEditValue] = useState('');
+  // stable human-readable label shown in the modal. Using this prevents
+  // the modal label flickering if `editField` changes during async saves.
+  const [editLabel, setEditLabel] = useState('');
 
   const load = useCallback(async () => {
     if (!user) return;
     setLoading(true);
-    const [l, m, t] = await Promise.all([
+
+    // fetch profile so we know when the account was created
+    let profileDoc: any | null;
+    try {
+      profileDoc = await getUserProfile(user.id);
+    } catch {
+      profileDoc = null;
+    }
+    setProfile(profileDoc);
+
+    // load today's basic pieces plus a slice of historical logs for streak
+    const [l, m, t, allLogs] = await Promise.all([
       logsRepo.getByDate(user.id, today),
       mealsRepo.getByDate(user.id, today),
       targetsRepo.getByWeek(user.id, getMondayYMD()),
+      logsRepo.getAll(user.id),
     ]);
+
     setLog(l || {
       date: today,
       weightKg: null, sleepHours: null, waterMl: null, steps: null,
@@ -60,6 +88,30 @@ export default function TodayScreen() {
     });
     setMeals(m);
     setTarget(t);
+
+    // determine the earliest date we should show in the streak
+    const accountStart: ISODate = profileDoc?.createdAt
+      ? (profileDoc.createdAt.toString().slice(0, 10) as ISODate)
+      : today;
+
+    // compute a 30‑day window for the streak UI and clip it at accountStart
+    const window = generateWindow(allLogs, 30, today, accountStart);
+    setStreakData(window);
+
+    // also compute streak values for storing
+    const currentStreak = computeCurrentStreak(window, new Date());
+    const maxStreak = computeMaxStreakFromLogs(allLogs);
+
+    // update local user object if stored
+    if (user?.id) {
+      const cached = await usersRepo.getById(user.id);
+      if (cached) {
+        cached.currentStreakDays = currentStreak;
+        cached.maxStreakDays = maxStreak;
+        await usersRepo.save(cached);
+      }
+    }
+
     setLoading(false);
   }, [user, today]);
 
@@ -71,6 +123,38 @@ export default function TodayScreen() {
     const updated: DailyLog = { ...log, ...updates, updatedAt: new Date().toISOString() };
     await logsRepo.save(user.id, updated);
     setLog(updated);
+
+    // refresh streak window for today / recent days (and filter by account start)
+    const all = await logsRepo.getAll(user.id);
+    const accountStart: ISODate = profile?.createdAt
+      ? (profile.createdAt.toString().slice(0, 10) as ISODate)
+      : today;
+    const window = generateWindow(all, 30, today, accountStart);
+    setStreakData(window);
+
+    // update streak counters
+    const currentStreak = computeCurrentStreak(window, new Date());
+    const maxStreak = computeMaxStreakFromLogs(all);
+    if (user?.id) {
+      // send to server profile
+      try {
+        await updateUserProfile(user.id, {
+          currentStreakDays: currentStreak,
+          maxStreakDays: maxStreak,
+          updatedAt: new Date().toISOString(),
+        });
+      } catch (e) {
+        console.warn("streak update failed", e);
+      }
+
+      const cached = await usersRepo.getById(user.id);
+      if (cached) {
+        cached.currentStreakDays = currentStreak;
+        cached.maxStreakDays = maxStreak;
+        await usersRepo.save(cached);
+      }
+    }
+
     setSaving(false);
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
   };
@@ -78,6 +162,7 @@ export default function TodayScreen() {
   const startEdit = (field: string, current: any) => {
     setEditField(field);
     setEditValue(current != null ? String(current) : '');
+    setEditLabel(field === 'weightKg' ? 'Weight' : field === 'sleepHours' ? 'Sleep' : field === 'waterMl' ? 'Water' : 'Steps');
   };
 
   const commitEdit = async () => {
@@ -89,8 +174,9 @@ export default function TodayScreen() {
     else if (editField === 'waterMl') updates.waterMl = isNaN(num) ? null : num;
     else if (editField === 'steps') updates.steps = isNaN(num) ? null : Math.round(num);
     else if (editField === 'notes') updates.notes = editValue.trim() || null;
-    setEditField(null);
+    // await saving before closing the modal to avoid intermediate UI states
     await saveLog(updates);
+    setEditField(null);
   };
 
   const mealCalories = meals.reduce((s, m) => s + (m.calories || 0), 0);
@@ -122,6 +208,8 @@ export default function TodayScreen() {
         refreshControl={<RefreshControl refreshing={loading} onRefresh={load} tintColor={C.primary} />}
         showsVerticalScrollIndicator={false}
       >
+        <Streak data={streakData} today={today} todayLog={log} />
+
         <View style={styles.headerRow}>
           <View>
             <Text style={styles.greeting}>Today</Text>
@@ -180,30 +268,36 @@ export default function TodayScreen() {
           />
         </Pressable>
 
-        {editField && editField !== 'notes' && (
-          <View style={styles.editCard}>
-            <Text style={styles.editLabel}>
-              Edit {editField === 'weightKg' ? 'Weight' : editField === 'sleepHours' ? 'Sleep' : editField === 'waterMl' ? 'Water' : 'Steps'}
-            </Text>
-            <View style={styles.editRow}>
-              <TextInput
-                style={styles.editInput}
-                value={editValue}
-                onChangeText={setEditValue}
-                keyboardType="decimal-pad"
-                autoFocus
-                placeholder="Enter value"
-                placeholderTextColor={C.textMuted}
-              />
-              <Pressable style={styles.editSaveBtn} onPress={commitEdit}>
-                <Ionicons name="checkmark" size={20} color={C.bg} />
-              </Pressable>
-              <Pressable style={styles.editCancelBtn} onPress={() => setEditField(null)}>
-                <Ionicons name="close" size={20} color={C.textSecondary} />
-              </Pressable>
+        {/* editing numeric daily metrics shown in a modal so UI doesn't jump around */}
+        <Modal
+          visible={!!editField && editField !== 'notes'}
+          transparent
+          animationType="fade"
+          onRequestClose={() => setEditField(null)}
+        >
+          <Pressable style={styles.modalOverlay} onPress={() => setEditField(null)}>
+            <View style={styles.modalCard}>
+              <Text style={styles.editLabel}>Edit {editLabel}</Text>
+              <View style={styles.editRow}>
+                <TextInput
+                  style={styles.editInput}
+                  value={editValue}
+                  onChangeText={setEditValue}
+                  keyboardType="decimal-pad"
+                  autoFocus
+                  placeholder="Enter value"
+                  placeholderTextColor={C.textMuted}
+                />
+                <Pressable style={styles.editSaveBtn} onPress={commitEdit}>
+                  <Ionicons name="checkmark" size={20} color={C.bg} />
+                </Pressable>
+                <Pressable style={styles.editCancelBtn} onPress={() => setEditField(null)}>
+                  <Ionicons name="close" size={20} color={C.textSecondary} />
+                </Pressable>
+              </View>
             </View>
-          </View>
-        )}
+          </Pressable>
+        </Modal>
 
         <Text style={styles.sectionTitle}>Calories</Text>
         <View style={styles.caloriesCard}>
@@ -289,12 +383,12 @@ const styles = StyleSheet.create({
   indicatorTextMet: { color: C.success },
   indicatorTextLogged: { color: C.textSecondary },
   indicatorTextEmpty: { color: C.textMuted },
-  sectionTitle: { fontFamily: 'Outfit_600SemiBold', fontSize: 16, color: C.textSecondary, marginBottom: 10, marginTop: 8 },
-  metricsGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 10, marginBottom: 12 },
+  sectionTitle: { fontFamily: 'Outfit_600SemiBold', fontSize: 16, color: C.textSecondary, marginBottom: S.xs, marginTop: S.xs },
+  metricsGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: S.xs, marginBottom: S.sm },
   metricCard: {
     flex: 1, minWidth: '45%', backgroundColor: C.surface2,
     borderRadius: 14, borderWidth: 1, borderColor: C.border,
-    padding: 14, gap: 4,
+    padding: S.md, gap: S.xxs,
   },
   metricIconWrap: { marginBottom: 4 },
   metricLabel: { fontFamily: 'Outfit_500Medium', fontSize: 12, color: C.textMuted },
@@ -303,16 +397,16 @@ const styles = StyleSheet.create({
   supplementRow: {
     flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
     backgroundColor: C.surface2, borderRadius: 14, borderWidth: 1, borderColor: C.border,
-    padding: 14, marginBottom: 24,
+    padding: S.md, marginBottom: S.lg,
   },
   supplementLeft: { flexDirection: 'row', alignItems: 'center', gap: 10 },
   supplementText: { fontFamily: 'Outfit_500Medium', fontSize: 15, color: C.textSecondary },
   editCard: {
     backgroundColor: C.surface2, borderRadius: 14, borderWidth: 1, borderColor: C.primary + '60',
-    padding: 14, marginBottom: 16, gap: 8,
+    padding: S.md, marginBottom: S.md, gap: S.xs,
   },
-  editLabel: { fontFamily: 'Outfit_500Medium', fontSize: 13, color: C.textMuted },
-  editRow: { flexDirection: 'row', gap: 8, alignItems: 'center' },
+  editLabel: { fontFamily: 'Outfit_500Medium', fontSize: 13, color: C.textMuted, marginBottom: S.sm },
+  editRow: { flexDirection: 'row', gap: S.xs, alignItems: 'center' },
   editInput: {
     flex: 1, backgroundColor: C.surface3, borderRadius: 10, paddingHorizontal: 12, height: 44,
     fontFamily: 'Outfit_400Regular', fontSize: 16, color: C.text, borderWidth: 1, borderColor: C.border,
@@ -327,9 +421,9 @@ const styles = StyleSheet.create({
   },
   caloriesCard: {
     backgroundColor: C.surface2, borderRadius: 14, borderWidth: 1, borderColor: C.border,
-    padding: 16, marginBottom: 24,
+    padding: S.md, marginBottom: S.lg,
   },
-  caloriesTop: { flexDirection: 'row', justifyContent: 'space-between', marginBottom: 14 },
+  caloriesTop: { flexDirection: 'row', justifyContent: 'space-between', marginBottom: S.md },
   caloriesTotal: { fontFamily: 'Outfit_700Bold', fontSize: 36, color: C.primary },
   caloriesLabel: { fontFamily: 'Outfit_400Regular', fontSize: 13, color: C.textMuted },
   caloriesTarget: { alignItems: 'flex-end' },
@@ -344,8 +438,13 @@ const styles = StyleSheet.create({
   notesCard: {
     flexDirection: 'row', alignItems: 'flex-start', gap: 10,
     backgroundColor: C.surface2, borderRadius: 14, borderWidth: 1, borderColor: C.border,
-    padding: 14, minHeight: 60,
+    padding: S.md, minHeight: 60,
   },
   notesText: { fontFamily: 'Outfit_400Regular', fontSize: 15, color: C.textSecondary, flex: 1, lineHeight: 22 },
   notesPlaceholder: { fontFamily: 'Outfit_400Regular', fontSize: 15, color: C.textMuted, flex: 1 },
+  modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'center', alignItems: 'center' },
+  modalCard: {
+    width: '80%', backgroundColor: C.surface2, borderRadius: 14, padding: S.lg,
+    borderWidth: 1, borderColor: C.primary + '60', flexDirection: 'column', gap: S.sm,
+  },
 });

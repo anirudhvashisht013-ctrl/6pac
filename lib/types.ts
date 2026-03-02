@@ -9,6 +9,10 @@ export interface User {
   currentWeightKg: number;
   goalType: 'lean' | 'recomp' | 'buffed';
   createdAt: string;
+
+  // computed streak stats (optional)
+  currentStreakDays?: number;
+  maxStreakDays?: number;
 }
 
 export interface DailyLog {

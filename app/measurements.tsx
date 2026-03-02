@@ -16,6 +16,7 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
 import * as Haptics from "expo-haptics";
 import { C } from "@/constants/colors";
+import { S } from "@/constants/spacing";
 import { useAuth } from "@/context/AuthContext";
 import { measurementsRepo } from "@/lib/repos/measurementsRepo";
 import type { BodyMeasurementEntry, ISODate } from "@/lib/models";
@@ -276,13 +277,13 @@ const styles = StyleSheet.create({
 
   content: { paddingHorizontal: 20, paddingTop: 20 },
 
-  sectionTitle: { fontFamily: "Outfit_600SemiBold", fontSize: 17, color: C.text, marginBottom: 4 },
-  sectionSub: { fontFamily: "Outfit_400Regular", fontSize: 13, color: C.textMuted, marginBottom: 16 },
+  sectionTitle: { fontFamily: "Outfit_600SemiBold", fontSize: 17, color: C.text, marginBottom: S.xxs },
+  sectionSub: { fontFamily: "Outfit_400Regular", fontSize: 13, color: C.textMuted, marginBottom: S.lg },
 
-  formGrid: { flexDirection: "row", flexWrap: "wrap", gap: 12, marginBottom: 16 },
+  formGrid: { flexDirection: "row", flexWrap: "wrap", gap: S.sm, marginBottom: S.lg },
   formField: { width: "47%" },
-  formLabel: { fontFamily: "Outfit_500Medium", fontSize: 12, color: C.textMuted, marginBottom: 6 },
-  formInputRow: { flexDirection: "row", alignItems: "center", gap: 6 },
+  formLabel: { fontFamily: "Outfit_500Medium", fontSize: 12, color: C.textMuted, marginBottom: S.xxs },
+  formInputRow: { flexDirection: "row", alignItems: "center", gap: S.xs },
   formInput: {
     flex: 1,
     backgroundColor: C.surface2,
@@ -298,13 +299,13 @@ const styles = StyleSheet.create({
   },
   formUnit: { fontFamily: "Outfit_400Regular", fontSize: 12, color: C.textMuted, width: 22 },
 
-  notesField: { marginBottom: 16 },
+  notesField: { marginBottom: S.lg },
   notesInput: {
     backgroundColor: C.surface2,
     borderRadius: 10,
     borderWidth: 1,
     borderColor: C.border,
-    paddingHorizontal: 14,
+    paddingHorizontal: S.md,
     paddingVertical: 12,
     height: 80,
     fontFamily: "Outfit_400Regular",

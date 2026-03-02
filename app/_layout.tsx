@@ -6,6 +6,7 @@ import React, { useEffect } from "react";
 import { GestureHandlerRootView } from "react-native-gesture-handler";
 import { SafeAreaProvider } from "react-native-safe-area-context";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
+import SubtleSplash from "@/components/SubtleSplash";
 import { queryClient } from "@/lib/query-client";
 import { AuthProvider, useAuth } from "@/context/AuthContext";
 import {
@@ -18,6 +19,7 @@ import {
 import { View } from "react-native";
 import { C } from "@/constants/colors";
 
+// keep the native splash open until we've finished preparing JS state
 SplashScreen.preventAutoHideAsync();
 
 function RootLayoutNav() {
@@ -33,7 +35,8 @@ function RootLayoutNav() {
     else router.replace("/(tabs)");
   }, [user, isLoading, isProfileComplete]);
 
-  if (isLoading) return <View style={{ flex: 1, backgroundColor: C.bg }} />;
+  // while auth state is being restored, show minimal branded splash
+  if (isLoading) return <SubtleSplash />;
 
   return (
     <Stack screenOptions={{ headerShown: false, contentStyle: { backgroundColor: C.bg } }}>
@@ -57,7 +60,7 @@ export default function RootLayout() {
     Outfit_700Bold,
   });
 
-  if (!fontsLoaded) return <View style={{ flex: 1, backgroundColor: C.bg }} />;
+  if (!fontsLoaded) return <SubtleSplash />;
 
   return (
     <ErrorBoundary>

@@ -72,6 +72,12 @@ export const logsRepo = {
     const all = await this.getAll(uid);
     return all.find(l => l.date === date) || null;
   },
+  async getRange(uid: string, start: string, end: string): Promise<DailyLog[]> {
+    const all = await this.getAll(uid);
+    return all
+      .filter((l) => l.date >= start && l.date <= end)
+      .sort((a, b) => a.date.localeCompare(b.date));
+  },
   async save(uid: string, log: DailyLog): Promise<void> {
     const all = await this.getAll(uid);
     const idx = all.findIndex(l => l.date === log.date);

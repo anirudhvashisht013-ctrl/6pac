@@ -13,10 +13,8 @@ import {
   schedulesRepo, targetsRepo, logsRepo, mealsRepo,
   workoutsRepo, sessionsRepo,
 } from '@/lib/storage';
-import {
-  getMondayYMD, getWeekDates, dayLabel, formatDate,
-  addDays, todayYMD, monthLabel, getWeekNumber, isFuture,
-} from '@/lib/dates';
+import { todayYMD, getWeekDates, getMondayYMD, formatDateLong } from "@/lib/dates";
+import type { ISODate } from "@/lib/models";
 import type {
   WeekSchedule, WeeklyTarget, PlannedDay, WorkoutTemplate,
   DailyLog, MealEntry, WorkoutSession,
@@ -168,6 +166,7 @@ export default function WeekScreen() {
     ]);
 
     const weekDates = getWeekDates(weekStart);
+    const weekDateSet = new Set<string>(weekDates);
 
     const defaultSchedule: WeekSchedule = {
       weekStartDate: weekStart,
@@ -177,9 +176,9 @@ export default function WeekScreen() {
     setSchedule(sched || defaultSchedule);
     setTarget(tgt);
     setTemplates(tmpl);
-    setLogs(allLogs.filter(l => weekDates.includes(l.date)));
-    setMeals(allMeals.filter(m => weekDates.includes(m.date)));
-    setSessions(allSessions.filter(s => weekDates.includes(s.date)));
+    setLogs(allLogs.filter(l => weekDateSet.has(l.date)));
+    setMeals(allMeals.filter(m => weekDateSet.has(m.date)));
+    setSessions(allSessions.filter(s => weekDateSet.has(s.date)));
 
     if (tgt) {
       setTargetForm({
@@ -454,6 +453,37 @@ export default function WeekScreen() {
       </Modal>
     </View>
   );
+}
+
+function isFuture(date: string) {
+  const d = new Date(`${date}T00:00:00`);
+  const t = new Date();
+  t.setHours(0, 0, 0, 0);
+  return d.getTime() > t.getTime();
+}
+
+function dayLabel(date: string) {
+  return new Date(`${date}T00:00:00`).toLocaleDateString(undefined, { weekday: "short" });
+}
+
+function formatDate(date: string) {
+  // reuse the shared formatter
+  return formatDateLong(date as ISODate);
+}
+
+function monthLabel(weekStart: string) {
+  const d = new Date(`${weekStart}T00:00:00`);
+  return d.toLocaleDateString(undefined, { month: "short" });
+}
+
+// ISO week number (standard-ish)
+function getWeekNumber(weekStart: string) {
+  const d = new Date(`${weekStart}T00:00:00`);
+  const tmp = new Date(Date.UTC(d.getFullYear(), d.getMonth(), d.getDate()));
+  const dayNum = tmp.getUTCDay() || 7;
+  tmp.setUTCDate(tmp.getUTCDate() + 4 - dayNum);
+  const yearStart = new Date(Date.UTC(tmp.getUTCFullYear(), 0, 1));
+  return Math.ceil((((tmp.getTime() - yearStart.getTime()) / 86400000) + 1) / 7);
 }
 
 const styles = StyleSheet.create({

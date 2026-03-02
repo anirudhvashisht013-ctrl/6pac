@@ -11,7 +11,8 @@ import * as Crypto from 'expo-crypto';
 import { C } from '@/constants/colors';
 import { useAuth } from '@/context/AuthContext';
 import { mealsRepo, targetsRepo } from '@/lib/storage';
-import { todayYMD, formatDate, getMondayYMD, addDays } from '@/lib/dates';
+import { todayYMD, addDays, formatDateLong, toYMD, getMondayYMD } from "@/lib/dates";
+import type { ISODate } from "@/lib/models";
 import type { MealEntry, WeeklyTarget } from '@/lib/types';
 
 const EMPTY_FORM = {
@@ -22,6 +23,7 @@ const EMPTY_FORM = {
   carbsG: '',
   fatG: '',
 };
+
 
 function MacroBar({ label, value, max, color }: { label: string; value: number; max: number; color: string }) {
   const pct = max > 0 ? Math.min(value / max, 1) : 0;
@@ -62,9 +64,11 @@ export default function NutritionScreen() {
   const load = useCallback(async () => {
     if (!user) return;
     setLoading(true);
+    const selected = new Date(`${selectedDate}T00:00:00`);
+    const weekStart = getMondayYMD(selected);
     const [m, t] = await Promise.all([
       mealsRepo.getByDate(user.id, selectedDate),
-      targetsRepo.getByWeek(user.id, getMondayYMD()),
+      targetsRepo.getByWeek(user.id, weekStart),
     ]);
     setMeals(m);
     setTarget(t);
@@ -125,8 +129,8 @@ export default function NutritionScreen() {
   const totalCarbs = meals.reduce((s, m) => s + (m.carbsG || 0), 0);
   const totalFat = meals.reduce((s, m) => s + (m.fatG || 0), 0);
 
-  const today = todayYMD();
-  const dateRange = [-2, -1, 0].map(d => addDays(today, d));
+  const today = new Date(); // real Date object
+  const dateRange = [-2, -1, 0].map(d =>toYMD(addDays(today, d)));
 
   return (
     <View style={{ flex: 1, backgroundColor: C.bg }}>
@@ -156,7 +160,7 @@ export default function NutritionScreen() {
               onPress={() => setSelectedDate(d)}
             >
               <Text style={[styles.dateChipText, d === selectedDate && styles.dateChipTextActive]}>
-                {d === today ? 'Today' : formatDate(d)}
+                {d === todayYMD() ? 'Today' : formatDateLong(d)}
               </Text>
             </Pressable>
           ))}

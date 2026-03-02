@@ -1,6 +1,6 @@
-// lib/seed.ts
-import type { DailySnapshot, BodyMeasurementEntry } from "@/lib/models";
-import { todayYMD, toYMD, addDays } from "@/lib/dates";
+// lib/dev/seedTestUser.ts
+import type { DailySnapshot, BodyMeasurementEntry, ISODate } from "@/lib/models";
+import { todayYMD, addDays, toYMD } from "@/lib/dates";
 import { daysRepo } from "@/lib/repos/daysRepo";
 import { measurementsRepo } from "@/lib/repos/measurementsRepo";
 
@@ -24,12 +24,21 @@ export async function seedTestUser(
   daysBack = 90,
   measureDaysBack = 180
 ): Promise<void> {
-  const endYMD = todayYMD();
-  const endDate = new Date(); // use a real Date for math
+  // Use Date internally, convert to ISODate only when writing.
+  const endDate = new Date();
+
+  // Helper: add N days to an ISODate and get ISODate back
+  const addDaysISO = (iso: ISODate, days: number): ISODate => {
+    const base = new Date(`${iso}T00:00:00`);
+    const d = addDays(base, days);
+    const yyyy = d.getFullYear();
+    const mm = String(d.getMonth() + 1).padStart(2, "0");
+    const dd = String(d.getDate()).padStart(2, "0");
+    return `${yyyy}-${mm}-${dd}` as ISODate;
+  };
 
   // --- Daily Snapshots ---
   let weight = 90;
-
   for (let i = daysBack - 1; i >= 0; i--) {
     const date = toYMD(addDays(endDate, -i));
 
@@ -64,11 +73,8 @@ export async function seedTestUser(
     const hitSteps = steps == null ? null : chance(0.5);
     const hitWater = waterMl == null ? null : chance(0.6);
 
-    // IMPORTANT:
-    // daysRepo.upsert(uid, date, patch) expects (uid, date, patch)
-    // and it will set updatedAt/date internally.
-    const patch: Partial<DailySnapshot> = {
-      date, // harmless even if merged, but optional
+    const day: DailySnapshot = {
+      date,
       weightKg: Number(weight.toFixed(1)),
       sleepHours,
       steps,
@@ -87,9 +93,11 @@ export async function seedTestUser(
       hitWater,
       supplementsTaken: chance(0.35),
       notes: chance(0.08) ? "seeded" : null,
+      updatedAt: new Date(),
     };
 
-    await daysRepo.upsert(uid, date, patch);
+    const { date: dayDate, ...patch } = day;
+    await daysRepo.upsert(uid, dayDate, patch);
   }
 
   // --- Measurements (every ~14 days) ---

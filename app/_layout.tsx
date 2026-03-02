@@ -27,18 +27,12 @@ function RootLayoutNav() {
 
     SplashScreen.hideAsync();
 
-    if (!user) {
-      router.replace("/(auth)/login");
-    } else if (!isProfileComplete) {
-      router.replace("/(auth)/onboarding");
-    } else {
-      router.replace("/(tabs)");
-    }
+    if (!user) router.replace("/(auth)/login");
+    else if (!isProfileComplete) router.replace("/(auth)/onboarding");
+    else router.replace("/(tabs)");
   }, [user, isLoading, isProfileComplete]);
 
-  if (isLoading) {
-    return <View style={{ flex: 1, backgroundColor: C.bg }} />;
-  }
+  if (isLoading) return <View style={{ flex: 1, backgroundColor: C.bg }} />;
 
   return (
     <Stack screenOptions={{ headerShown: false, contentStyle: { backgroundColor: C.bg } }}>
@@ -59,9 +53,7 @@ export default function RootLayout() {
     Outfit_700Bold,
   });
 
-  if (!fontsLoaded) {
-    return <View style={{ flex: 1, backgroundColor: C.bg }} />;
-  }
+  if (!fontsLoaded) return <View style={{ flex: 1, backgroundColor: C.bg }} />;
 
   return (
     <ErrorBoundary>

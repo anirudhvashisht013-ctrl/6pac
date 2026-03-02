@@ -1,3 +1,4 @@
+// app/(tabs)/progress.tsx
 import React, { useState, useCallback, useMemo } from "react";
 import {
   View,
@@ -8,13 +9,16 @@ import {
   ActivityIndicator,
   Dimensions,
   Platform,
+  Alert,
 } from "react-native";
+import { confirm } from "@/lib/ui/confirm";
 import { useFocusEffect, router } from "expo-router";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
 import Svg, { Path, Circle } from "react-native-svg";
 import { C } from "@/constants/colors";
 import { useAuth } from "@/context/AuthContext";
+
 
 import type { DailySnapshot, BodyMeasurementEntry } from "@/lib/models";
 import { presetRange } from "@/lib/ranges";
@@ -23,6 +27,7 @@ import { movingAverage, linearTrend } from "@/lib/trends";
 
 import { daysRepo } from "@/lib/repos/daysRepo";
 import { measurementsRepo } from "@/lib/repos/measurementsRepo";
+import { seedTestUser } from "@/lib/seed";
 
 const SCREEN_W = Dimensions.get("window").width;
 const CHART_W = SCREEN_W - 64;
@@ -102,13 +107,14 @@ function trendBadge(direction: string, perWeek: number | null) {
 
 export default function ProgressScreen() {
   const insets = useSafeAreaInsets();
-  const { user } = useAuth();
 
   const [days, setDays] = useState<DailySnapshot[]>([]);
   const [measurements, setMeasurements] = useState<BodyMeasurementEntry[]>([]);
   const [loading, setLoading] = useState(true);
+  const [seeding, setSeeding] = useState(false);
+  const { user, logout } = useAuth();
 
-  // You can later add UI to switch this between 2w/1m/3m/1y
+  // later you’ll swap this with a UI filter (2w/1m/3m/1y)
   const range = useMemo(() => presetRange("3m"), []);
   const measurementRange = useMemo(() => presetRange("1y"), []);
 
@@ -132,6 +138,62 @@ export default function ProgressScreen() {
     }, [load])
   );
 
+  const confirmSeed = async (): Promise<boolean> => {
+  if (Platform.OS === "web") {
+    return window.confirm(
+      "Seed test data?\n\nThis will write dummy day + measurement records to Firestore for THIS logged-in account."
+    );
+  }
+
+  return await new Promise((resolve) => {
+    Alert.alert(
+      "Seed test data?",
+      "This will write dummy day + measurement records to Firestore for THIS logged-in account.",
+      [
+        { text: "Cancel", style: "cancel", onPress: () => resolve(false) },
+        { text: "Seed", style: "destructive", onPress: () => resolve(true) },
+      ]
+    );
+  });
+};
+
+const onSeed = useCallback(async () => {
+  console.log("Seed button pressed");
+
+  if (!user) {
+    console.log("Seed blocked: user is null");
+    return;
+  }
+
+  const ok = await confirm({
+    title: "Seed test data?",
+    message:
+      "This will write dummy day + measurement records to Firestore for THIS logged-in account.",
+    okText: "Seed",
+    cancelText: "Cancel",
+    destructive: true,
+  });
+
+  if (!ok) {
+    console.log("Seed cancelled");
+    return;
+  }
+
+  try {
+    setSeeding(true);
+    console.log("Seeding for uid:", user.id);
+
+    await seedTestUser(user.id, 90, 180); // adjust args if needed
+    await load(); // reload progress data
+
+    console.log("Seed done ✅");
+  } catch (e: any) {
+    console.error("Seed failed ❌", e);
+  } finally {
+    setSeeding(false);
+  }
+}, [user, load]);
+
   // ----- Trend: Weight -----
   const weightSeries = useMemo(() => {
     const s = toSeries(days, (d) => d.weightKg);
@@ -139,37 +201,28 @@ export default function ProgressScreen() {
   }, [days]);
 
   const weightMA7 = useMemo(() => movingAverage(weightSeries, 7), [weightSeries]);
-  const weightTrend = useMemo(
-    () => linearTrend(weightMA7, 0.1), // flat if < 0.1 kg/week
-    [weightMA7]
-  );
+  const weightTrend = useMemo(() => linearTrend(weightMA7, 0.1), [weightMA7]);
 
   const weightData = useMemo(() => {
-    const numeric = weightMA7
+    return weightMA7
       .map((p, i) => (typeof p.value === "number" ? { x: i, y: p.value } : null))
       .filter((x): x is { x: number; y: number } => !!x);
-
-    return numeric;
   }, [weightMA7]);
 
   const latestWeight = weightTrend.lastValue;
   const weightChange = weightTrend.deltaFromStart;
 
-  const weightMin =
-    weightData.length > 0 ? Math.min(...weightData.map((d) => d.y)) - 1 : 0;
-  const weightMax =
-    weightData.length > 0 ? Math.max(...weightData.map((d) => d.y)) + 1 : 100;
+  const weightMin = weightData.length > 0 ? Math.min(...weightData.map((d) => d.y)) - 1 : 0;
+  const weightMax = weightData.length > 0 ? Math.max(...weightData.map((d) => d.y)) + 1 : 100;
 
-  // ----- Workouts (analytics-first using day summary) -----
+  // ----- Workouts (from day summary) -----
   const workoutDays = useMemo(() => days.filter((d) => d.didWorkout).length, [days]);
 
   // ----- Adherence (based on hit flags) -----
   const recent = useMemo(() => days.slice(-14), [days]);
-
   const pct = (num: number, den: number) => (den === 0 ? 0 : (num / den) * 100);
 
   const calAdherence = useMemo(() => {
-    // we don't have hitCalories computed yet; keep 0 until you add it via targets logic
     const tracked = recent.filter((d) => d.calories != null);
     const hits = tracked.filter((d) => d.hitCalories === true).length;
     return pct(hits, tracked.length);
@@ -212,6 +265,26 @@ export default function ProgressScreen() {
       >
         <Text style={styles.pageTitle}>Progress</Text>
 
+        <View style={styles.topActions}>
+          <Pressable
+            style={({ pressed }) => [styles.actionBtn, pressed && { opacity: 0.85 }]}
+            onPress={onSeed}
+            disabled={seeding}
+          >
+            <Ionicons name="flask-outline" size={16} color={C.primary} />
+            <Text style={styles.actionBtnText}>{seeding ? "Seeding..." : "Seed Data"}</Text>
+          </Pressable>
+
+          <Pressable
+            style={({ pressed }) => [styles.actionBtn, pressed && { opacity: 0.85 }]}
+            onPress={logout}
+          >
+            <Ionicons name="log-out-outline" size={16} color={C.primary} />
+            <Text style={styles.actionBtnText}>Logout</Text>
+          </Pressable>
+
+        </View>
+
         <View style={styles.statRow}>
           {[
             {
@@ -249,9 +322,7 @@ export default function ProgressScreen() {
             <LineChart data={weightData} color={C.primary} min={weightMin} max={weightMax} />
             <View style={styles.chartLabels}>
               <Text style={styles.chartLabel}>{weightMin.toFixed(1)} kg</Text>
-              <Text style={styles.chartLabel}>
-                {weightMax.toFixed(1)} kg
-              </Text>
+              <Text style={styles.chartLabel}>{weightMax.toFixed(1)} kg</Text>
             </View>
             <Text style={styles.trendNote}>
               Overall change:{" "}
@@ -262,7 +333,7 @@ export default function ProgressScreen() {
 
         <Text style={styles.sectionTitle}>Weekly Adherence</Text>
         <View style={styles.adherenceCard}>
-          <Text style={styles.adherenceNote}>Based on last 14 days (requires hit flags)</Text>
+          <Text style={styles.adherenceNote}>Based on last 14 days</Text>
           <AdherenceBar label="Calories" pct={calAdherence} color={C.primary} />
           <AdherenceBar label="Steps" pct={stepsAdherence} color={C.secondary} />
           <AdherenceBar label="Water" pct={waterAdherence} color={C.accent} />
@@ -282,9 +353,7 @@ export default function ProgressScreen() {
         {!latestMeasurement ? (
           <View style={styles.noDataCard}>
             <Ionicons name="body-outline" size={32} color={C.border} />
-            <Text style={styles.noDataText}>
-              Log measurements twice a month to track changes
-            </Text>
+            <Text style={styles.noDataText}>Log measurements twice a month to track changes</Text>
             <Pressable style={styles.logMeasureBtn} onPress={() => router.push("/measurements")}>
               <Text style={styles.logMeasureBtnText}>Log Measurements</Text>
             </Pressable>
@@ -296,9 +365,7 @@ export default function ProgressScreen() {
           >
             <View style={styles.measureCardTop}>
               <Text style={styles.measureDate}>Latest: {latestMeasurement.date}</Text>
-              {measurements.length >= 2 && (
-                <Text style={styles.measureCount}>{measurements.length} entries</Text>
-              )}
+              {measurements.length >= 2 && <Text style={styles.measureCount}>{measurements.length} entries</Text>}
             </View>
             <View style={styles.measureGrid}>
               {[
@@ -329,7 +396,23 @@ export default function ProgressScreen() {
 const styles = StyleSheet.create({
   centerFlex: { flex: 1, alignItems: "center", justifyContent: "center" },
   content: { paddingHorizontal: 20 },
-  pageTitle: { fontFamily: "Outfit_700Bold", fontSize: 30, color: C.text, marginBottom: 20 },
+
+  pageTitle: { fontFamily: "Outfit_700Bold", fontSize: 30, color: C.text, marginBottom: 14 },
+
+  topActions: { flexDirection: "row", flexWrap: "wrap", gap: 10, marginBottom: 18 },
+  actionBtn: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+    backgroundColor: C.primaryBg,
+    borderRadius: 10,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    borderWidth: 1,
+    borderColor: C.primary + "60",
+  },
+  actionBtnText: { fontFamily: "Outfit_600SemiBold", fontSize: 13, color: C.primary },
+
   statRow: { flexDirection: "row", gap: 10, marginBottom: 24 },
   statCard: {
     flex: 1,
@@ -343,8 +426,10 @@ const styles = StyleSheet.create({
   statVal: { fontFamily: "Outfit_700Bold", fontSize: 24 },
   statLabel: { fontFamily: "Outfit_600SemiBold", fontSize: 13, color: C.textSecondary },
   statSub: { fontFamily: "Outfit_400Regular", fontSize: 11, color: C.textMuted },
+
   sectionTitle: { fontFamily: "Outfit_600SemiBold", fontSize: 16, color: C.textSecondary, marginBottom: 10 },
   sectionRow: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", marginBottom: 10 },
+
   chartCard: {
     backgroundColor: C.surface2,
     borderRadius: 14,
@@ -357,6 +442,7 @@ const styles = StyleSheet.create({
   chartLabels: { flexDirection: "row", justifyContent: "space-between" },
   chartLabel: { fontFamily: "Outfit_400Regular", fontSize: 11, color: C.textMuted },
   trendNote: { fontFamily: "Outfit_400Regular", fontSize: 12, color: C.textMuted, marginTop: 4 },
+
   noDataCard: {
     backgroundColor: C.surface2,
     borderRadius: 14,
@@ -368,6 +454,7 @@ const styles = StyleSheet.create({
     marginBottom: 24,
   },
   noDataText: { fontFamily: "Outfit_400Regular", fontSize: 14, color: C.textMuted, textAlign: "center" },
+
   adherenceCard: {
     backgroundColor: C.surface2,
     borderRadius: 14,
@@ -378,6 +465,7 @@ const styles = StyleSheet.create({
     gap: 14,
   },
   adherenceNote: { fontFamily: "Outfit_400Regular", fontSize: 12, color: C.textMuted, marginBottom: -4 },
+
   measureBtn: {
     flexDirection: "row",
     alignItems: "center",
@@ -390,6 +478,7 @@ const styles = StyleSheet.create({
     borderColor: C.primary + "60",
   },
   measureBtnText: { fontFamily: "Outfit_600SemiBold", fontSize: 13, color: C.primary },
+
   logMeasureBtn: {
     backgroundColor: C.primaryBg,
     borderRadius: 10,
@@ -399,6 +488,7 @@ const styles = StyleSheet.create({
     borderColor: C.primary + "60",
   },
   logMeasureBtnText: { fontFamily: "Outfit_600SemiBold", fontSize: 14, color: C.primary },
+
   measureCard: {
     backgroundColor: C.surface2,
     borderRadius: 14,

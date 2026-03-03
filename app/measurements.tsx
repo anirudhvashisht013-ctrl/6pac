@@ -18,6 +18,7 @@ import * as Haptics from "expo-haptics";
 import { C } from "@/constants/colors";
 import { S } from "@/constants/spacing";
 import { useAuth } from "@/context/AuthContext";
+import { canLogMeasurementDay } from "@/lib/measurements/slots";
 import { measurementsRepo } from "@/lib/repos/measurementsRepo";
 import type { BodyMeasurementEntry, ISODate } from "@/lib/models";
 
@@ -53,12 +54,6 @@ function isISODate(v: string): v is ISODate {
   return /^\d{4}-\d{2}-\d{2}$/.test(v);
 }
 
-function ymdToDate(ymd: ISODate): Date {
-  // local midnight
-  const [y, m, d] = ymd.split("-").map(Number);
-  return new Date(y, (m as number) - 1, d);
-}
-
 export default function MeasurementsScreen() {
   const insets = useSafeAreaInsets();
   const { user } = useAuth();
@@ -90,11 +85,7 @@ export default function MeasurementsScreen() {
     }
 
     // Prevent future-date logging (your rule: can't add beforehand)
-    const slotDay = ymdToDate(scheduledYMD).getTime();
-    const today = new Date();
-    const todayMidnight = new Date(today.getFullYear(), today.getMonth(), today.getDate()).getTime();
-
-    if (slotDay > todayMidnight) {
+    if (!canLogMeasurementDay(scheduledYMD)) {
       Alert.alert("Too early", "You can log only on the scheduled day (or later if missed).");
       return;
     }
@@ -102,11 +93,6 @@ export default function MeasurementsScreen() {
     setSaving(true);
 
     try {
-      const numOrNull = (v: string | undefined) => {
-        const n = v ? parseFloat(v) : NaN;
-        return Number.isFinite(n) ? n : null;
-      };
-
       const entry: BodyMeasurementEntry = {
         schemaVersion: 1,
         date: scheduledYMD,

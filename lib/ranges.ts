@@ -1,9 +1,10 @@
 // lib/ranges.ts
 import { toISODate } from "@/lib/dateKeys";
+import type { ISODate } from "@/lib/models";
 
 export type DateRange = {
-  start: string; // ISO YYYY-MM-DD
-  end: string;
+  start: ISODate;
+  end: ISODate;
 };
 
 function shiftDays(base: Date, delta: number): Date {

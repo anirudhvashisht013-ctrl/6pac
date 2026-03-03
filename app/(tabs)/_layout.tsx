@@ -5,6 +5,7 @@ import { Platform, StyleSheet, View } from "react-native";
 import { Ionicons, MaterialCommunityIcons } from "@expo/vector-icons";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { C } from "@/constants/colors";
+import SyncStatusIndicator from "@/components/SyncStatusIndicator";
 
 function ClassicTabLayout() {
   const safeAreaInsets = useSafeAreaInsets();
@@ -30,10 +31,13 @@ function ClassicTabLayout() {
     return <Ionicons name={icon as any} size={24} color={color} />;
   };
 
-  const makeTabIcon =
-    (name: string) =>
-    ({ color, focused, size }: { color: string; focused: boolean; size: number }) =>
-      <TabIcon name={name} focused={focused} color={color} size={size} />;
+  const makeTabIcon = (name: string) => {
+    function TabBarIcon({ color, focused, size }: { color: string; focused: boolean; size: number }) {
+      return <TabIcon name={name} focused={focused} color={color} size={size} />;
+    }
+    TabBarIcon.displayName = `${name}TabBarIcon`;
+    return TabBarIcon;
+  };
 
   return (
     <Tabs
@@ -69,13 +73,15 @@ function ClassicTabLayout() {
 
       {/* New Profile tab */}
       <Tabs.Screen name="profile" options={{ title: "Profile", tabBarIcon: makeTabIcon("profile") }} />
-
-      {/* Progress exists as a route, but NOT in the tab bar */}
-      <Tabs.Screen name="progress" options={{ href: null }} />
     </Tabs>
   );
 }
 
 export default function TabLayout() {
-  return <ClassicTabLayout />;
+  return (
+    <View style={{ flex: 1 }}>
+      <ClassicTabLayout />
+      <SyncStatusIndicator />
+    </View>
+  );
 }

@@ -16,14 +16,18 @@ import {
   Outfit_700Bold,
   useFonts,
 } from "@expo-google-fonts/outfit";
-import { View } from "react-native";
 import { C } from "@/constants/colors";
+import { initializeMirrorQueue } from "@/lib/sync/mirrorQueue";
 
 // keep the native splash open until we've finished preparing JS state
 SplashScreen.preventAutoHideAsync();
 
 function RootLayoutNav() {
   const { user, isLoading, isProfileComplete } = useAuth();
+
+  useEffect(() => {
+    initializeMirrorQueue();
+  }, []);
 
   useEffect(() => {
     if (isLoading) return;

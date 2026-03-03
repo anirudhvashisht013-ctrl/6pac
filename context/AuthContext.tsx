@@ -3,6 +3,7 @@ import React, {
   useContext,
   useEffect,
   useMemo,
+  useCallback,
   useState,
   ReactNode,
 } from "react";
@@ -15,6 +16,9 @@ import {
 } from "firebase/auth";
 import { auth } from "@/lib/firebase";
 import { ensureUserProfile, getUserProfile, markOnboardingDone } from "@/lib/userProfile";
+import { ensureAutoBackupOnce } from "@/lib/backup/autoBackupOnce";
+import { reconcileCloudToLocal } from "@/lib/sync/reconcile";
+import { getIsOnline, subscribeNetworkStatus } from "@/lib/network";
 
 type AppUser = {
   id: string; // Firebase uid
@@ -85,9 +89,21 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           await ensureUserProfile(uid, email);
         }
 
+        // Pull cloud mirror into local cache before app screens start reading local repos.
+        try {
+          await reconcileCloudToLocal(uid);
+        } catch (e) {
+          console.warn("cloud->local reconcile failed", e);
+        }
+
         // Read profile to determine onboardingDone
         const profile = await getUserProfile(uid);
         setIsProfileComplete(!!profile?.onboardingDone);
+
+        // Fire-and-forget: run once per user/device after login restore.
+        void ensureAutoBackupOnce(uid).catch((e) => {
+          console.warn("auto backup failed", e);
+        });
       } catch {
         // If Firestore fails, do not assume complete
         setIsProfileComplete(false);
@@ -101,6 +117,34 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       unsub();
     };
   }, []);
+
+  useEffect(() => {
+    const uid = user?.id;
+    if (!uid) return;
+
+    const reconcileIfOnline = () => {
+      if (!getIsOnline()) return;
+      void reconcileCloudToLocal(uid).catch((e) => {
+        console.warn("reconcile on reconnect failed", e);
+      });
+    };
+
+    // Best-effort immediate pull for already-online state.
+    reconcileIfOnline();
+
+    const unsub = subscribeNetworkStatus(() => {
+      if (getIsOnline()) reconcileIfOnline();
+    });
+
+    const intervalId = setInterval(() => {
+      reconcileIfOnline();
+    }, 3 * 60 * 1000);
+
+    return () => {
+      unsub();
+      clearInterval(intervalId);
+    };
+  }, [user?.id]);
 
   const login = async (email: string, password: string): Promise<FirebaseUser> => {
     const cleanEmail = email.trim().toLowerCase();
@@ -144,7 +188,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setIsProfileComplete(false);
   };
 
-  const updateUser = async (updates: OnboardingUpdates) => {
+  const updateUser = useCallback(async (updates: OnboardingUpdates) => {
     const uid = user?.id;
     if (!uid) throw new Error("Session missing. Please login again.");
 
@@ -152,7 +196,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
     // Immediately reflect completion in context
     setIsProfileComplete(true);
-  };
+  }, [user?.id]);
 
   const value = useMemo<AuthContextValue>(
     () => ({
@@ -164,7 +208,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       logout,
       updateUser,
     }),
-    [user, isLoading, isProfileComplete]
+    [user, isLoading, isProfileComplete, updateUser]
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

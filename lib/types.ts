@@ -110,7 +110,8 @@ export interface WorkoutSession {
 }
 
 export interface BodyMeasurementEntry {
-  id: string;
+  // Legacy local/mirror identifier. New writes use `date` as the canonical key.
+  id?: string;
   date: string;
   waist: number | null;
   chest: number | null;
@@ -123,7 +124,10 @@ export interface BodyMeasurementEntry {
   bicepsL: number | null;
   bodyFatPercent: number | null;
   notes: string | null;
-  createdAt: string;
+  schemaVersion?: 1;
+  createdAt?: string;
+  loggedAt?: string;
+  updatedAt?: string;
 }
 
 export type GoalType = 'lean' | 'recomp' | 'buffed';

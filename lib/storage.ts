@@ -3,6 +3,8 @@ import type {
   User, DailyLog, MealEntry, WeeklyTarget,
   WeekSchedule, WorkoutTemplate, WorkoutSession, BodyMeasurementEntry
 } from './types';
+import { cloudMirrorRepo } from "@/lib/repos/cloudMirrorRepo";
+import { measurementDocId, normalizeMeasurementEntry } from "@/lib/measurements/identity";
 
 const KEY = {
   users: '@6pac:users',
@@ -26,6 +28,58 @@ async function get<T>(key: string): Promise<T | null> {
 async function set<T>(key: string, val: T): Promise<void> {
   await AsyncStorage.setItem(key, JSON.stringify(val));
 }
+
+function mirrorBestEffort(task: Promise<void>, label: string) {
+  void task.catch((err) => {
+    console.warn(`[cloud-mirror] ${label} failed`, err);
+  });
+}
+
+export type LocalDataSnapshot = {
+  logs: DailyLog[];
+  meals: MealEntry[];
+  targets: WeeklyTarget[];
+  schedules: WeekSchedule[];
+  templates: WorkoutTemplate[];
+  sessions: WorkoutSession[];
+  measurements: BodyMeasurementEntry[];
+};
+
+export const localCacheRepo = {
+  async getSnapshot(uid: string): Promise<LocalDataSnapshot> {
+    const [logs, meals, targets, schedules, templates, sessions, measurements] = await Promise.all([
+      get<DailyLog[]>(KEY.logs(uid)),
+      get<MealEntry[]>(KEY.meals(uid)),
+      get<WeeklyTarget[]>(KEY.targets(uid)),
+      get<WeekSchedule[]>(KEY.schedules(uid)),
+      get<WorkoutTemplate[]>(KEY.templates(uid)),
+      get<WorkoutSession[]>(KEY.sessions(uid)),
+      get<BodyMeasurementEntry[]>(KEY.measurements(uid)),
+    ]);
+
+    return {
+      logs: logs || [],
+      meals: meals || [],
+      targets: targets || [],
+      schedules: schedules || [],
+      templates: templates || [],
+      sessions: sessions || [],
+      measurements: measurements || [],
+    };
+  },
+
+  async setSnapshot(uid: string, data: LocalDataSnapshot): Promise<void> {
+    await Promise.all([
+      set(KEY.logs(uid), data.logs),
+      set(KEY.meals(uid), data.meals),
+      set(KEY.targets(uid), data.targets),
+      set(KEY.schedules(uid), data.schedules),
+      set(KEY.templates(uid), data.templates),
+      set(KEY.sessions(uid), data.sessions),
+      set(KEY.measurements(uid), data.measurements),
+    ]);
+  },
+};
 
 export const usersRepo = {
   async getAll(): Promise<User[]> {
@@ -84,6 +138,7 @@ export const logsRepo = {
     if (idx >= 0) all[idx] = log;
     else all.push(log);
     await set(KEY.logs(uid), all);
+    mirrorBestEffort(cloudMirrorRepo.upsertLog(uid, log), `logs/${log.date}`);
   },
 };
 
@@ -101,6 +156,7 @@ export const targetsRepo = {
     if (idx >= 0) all[idx] = target;
     else all.push(target);
     await set(KEY.targets(uid), all);
+    mirrorBestEffort(cloudMirrorRepo.upsertTarget(uid, target), `targets/${target.weekStartDate}`);
   },
 };
 
@@ -118,6 +174,7 @@ export const schedulesRepo = {
     if (idx >= 0) all[idx] = schedule;
     else all.push(schedule);
     await set(KEY.schedules(uid), all);
+    mirrorBestEffort(cloudMirrorRepo.upsertSchedule(uid, schedule), `schedules/${schedule.weekStartDate}`);
   },
 };
 
@@ -135,10 +192,12 @@ export const workoutsRepo = {
     if (idx >= 0) all[idx] = template;
     else all.push(template);
     await set(KEY.templates(uid), all);
+    mirrorBestEffort(cloudMirrorRepo.upsertTemplate(uid, template), `templates/${template.id}`);
   },
   async delete(uid: string, id: string): Promise<void> {
     const all = await this.getAll(uid);
     await set(KEY.templates(uid), all.filter(t => t.id !== id));
+    mirrorBestEffort(cloudMirrorRepo.deleteTemplate(uid, id), `templates/${id}:delete`);
   },
 };
 
@@ -156,10 +215,12 @@ export const mealsRepo = {
     if (idx >= 0) all[idx] = meal;
     else all.push(meal);
     await set(KEY.meals(uid), all);
+    mirrorBestEffort(cloudMirrorRepo.upsertMeal(uid, meal), `meals/${meal.id}`);
   },
   async delete(uid: string, id: string): Promise<void> {
     const all = await this.getAll(uid);
     await set(KEY.meals(uid), all.filter(m => m.id !== id));
+    mirrorBestEffort(cloudMirrorRepo.deleteMeal(uid, id), `meals/${id}:delete`);
   },
 };
 
@@ -181,22 +242,38 @@ export const sessionsRepo = {
     if (idx >= 0) all[idx] = session;
     else all.push(session);
     await set(KEY.sessions(uid), all);
+    mirrorBestEffort(cloudMirrorRepo.upsertSession(uid, session), `sessions/${session.id}`);
   },
 };
 
 export const measurementsRepo = {
   async getAll(uid: string): Promise<BodyMeasurementEntry[]> {
-    return (await get<BodyMeasurementEntry[]>(KEY.measurements(uid))) || [];
+    const all = (await get<BodyMeasurementEntry[]>(KEY.measurements(uid))) || [];
+    return all.map(normalizeMeasurementEntry);
   },
   async save(uid: string, entry: BodyMeasurementEntry): Promise<void> {
+    const normalized = normalizeMeasurementEntry(entry);
+    const key = measurementDocId(normalized);
+    if (!key) {
+      throw new Error("measurement missing stable key");
+    }
+
     const all = await this.getAll(uid);
-    const idx = all.findIndex(e => e.id === entry.id);
-    if (idx >= 0) all[idx] = entry;
-    else all.push(entry);
+    const idx = all.findIndex((e) => measurementDocId(e) === key);
+    if (idx >= 0) all[idx] = normalized;
+    else all.push(normalized);
     await set(KEY.measurements(uid), all);
+    mirrorBestEffort(cloudMirrorRepo.upsertMeasurement(uid, normalized), `measurements/${key}`);
   },
-  async delete(uid: string, id: string): Promise<void> {
+  async delete(uid: string, key: string): Promise<void> {
     const all = await this.getAll(uid);
-    await set(KEY.measurements(uid), all.filter(e => e.id !== id));
+    await set(
+      KEY.measurements(uid),
+      all.filter((e) => {
+        const docId = measurementDocId(e);
+        return docId !== key && e.id !== key && e.date !== key;
+      })
+    );
+    mirrorBestEffort(cloudMirrorRepo.deleteMeasurement(uid, key), `measurements/${key}:delete`);
   },
 };

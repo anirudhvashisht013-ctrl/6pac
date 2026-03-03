@@ -10,6 +10,9 @@ import { useAuth } from "@/context/AuthContext";
 import { getUserProfile } from "@/lib/userProfile";
 import { confirm } from "@/lib/ui/confirm";
 import { seedTestUser } from "@/lib/seed";
+import { exportLocalBackup } from "@/lib/backup/exportLocalBackup";
+import { useMirrorSyncState } from "@/lib/sync/mirrorQueue";
+import { useNetworkStatus } from "@/lib/network";
 
 type ProfileDoc = {
   email?: string;
@@ -21,17 +24,30 @@ type ProfileDoc = {
 export default function ProfileHubScreen() {
   const insets = useSafeAreaInsets();
   const { user, logout } = useAuth();
+  const sync = useMirrorSyncState();
+  const network = useNetworkStatus();
 
   const [profile, setProfile] = useState<ProfileDoc | null>(null);
   const [loadingProfile, setLoadingProfile] = useState(true);
   const [seeding, setSeeding] = useState(false);
+  const [exporting, setExporting] = useState(false);
+  const logoutColor = C.error;
 
   const loadProfile = useCallback(async () => {
     if (!user) return;
     setLoadingProfile(true);
     try {
-      const p = (await getUserProfile(user.id)) as any;
-      setProfile((p ?? null) as ProfileDoc | null);
+      const p = await getUserProfile(user.id);
+      if (!p) {
+        setProfile(null);
+        return;
+      }
+      setProfile({
+        email: p.email,
+        fullName: p.fullName,
+        dateOfBirth: p.dateOfBirth,
+        sex: p.sex,
+      });
     } finally {
       setLoadingProfile(false);
     }
@@ -64,10 +80,32 @@ export default function ProfileHubScreen() {
     }
   }, [user]);
 
+  const onExportBackup = useCallback(async () => {
+    if (!user) return;
+    try {
+      setExporting(true);
+      await exportLocalBackup(user.id);
+    } finally {
+      setExporting(false);
+    }
+  }, [user]);
+
   const displayName = profile?.fullName || "—";
   const displayEmail = user?.email || profile?.email || "—";
   const displaySex = profile?.sex || "—";
   const displayDob = profile?.dateOfBirth || "—";
+  const syncTitle = !network.isOnline
+    ? "Offline"
+    : sync.pendingCount > 0
+      ? "Sync Pending"
+      : "Synced";
+  const syncSubtitle = !network.isOnline
+    ? `${sync.pendingCount} pending change${sync.pendingCount === 1 ? "" : "s"}`
+    : sync.pendingCount > 0
+      ? `${sync.pendingCount} pending change${sync.pendingCount === 1 ? "" : "s"}`
+      : sync.lastSyncedAt
+        ? `Last synced ${new Date(sync.lastSyncedAt).toLocaleString()}`
+        : "No pending changes";
 
   return (
     <View style={{ flex: 1, backgroundColor: C.bg }}>
@@ -153,7 +191,42 @@ export default function ProfileHubScreen() {
 
         <Text style={styles.sectionTitle}>Account</Text>
 
+        <View style={styles.syncCard}>
+          <View style={styles.syncCardLeft}>
+            <Ionicons
+              name={
+                !network.isOnline
+                  ? "cloud-offline-outline"
+                  : sync.pendingCount > 0
+                    ? "sync-outline"
+                    : "cloud-done-outline"
+              }
+              size={18}
+              color={
+                !network.isOnline
+                  ? C.warning
+                  : sync.pendingCount > 0
+                    ? C.warning
+                    : C.success
+              }
+            />
+            <View style={{ flex: 1 }}>
+              <Text style={styles.syncTitle}>{syncTitle}</Text>
+              <Text style={styles.syncSubtitle}>{syncSubtitle}</Text>
+            </View>
+          </View>
+        </View>
+
         <View style={styles.actionsWrap}>
+          <Pressable
+            style={({ pressed }) => [styles.actionBtn, pressed && { opacity: 0.85 }]}
+            onPress={onExportBackup}
+            disabled={exporting}
+          >
+            <Ionicons name="download-outline" size={16} color={C.primary} />
+            <Text style={styles.actionBtnText}>{exporting ? "Exporting..." : "Export Backup"}</Text>
+          </Pressable>
+
           <Pressable
             style={({ pressed }) => [styles.actionBtn, pressed && { opacity: 0.85 }]}
             onPress={onSeed}
@@ -167,7 +240,7 @@ export default function ProfileHubScreen() {
             style={({ pressed }) => [styles.actionBtn, styles.dangerBtn, pressed && { opacity: 0.85 }]}
             onPress={logout}
           >
-            <Ionicons name="log-out-outline" size={16} color={styles.dangerText.color as any} />
+            <Ionicons name="log-out-outline" size={16} color={logoutColor} />
             <Text style={[styles.actionBtnText, styles.dangerText]}>Logout</Text>
           </Pressable>
         </View>
@@ -279,6 +352,21 @@ const styles = StyleSheet.create({
     borderColor: C.primary + "60",
   },
   actionBtnText: { fontFamily: "Outfit_600SemiBold", fontSize: 13, color: C.primary },
+  syncCard: {
+    backgroundColor: C.surface2,
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: C.border,
+    padding: 14,
+    marginBottom: 12,
+  },
+  syncCardLeft: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
+  },
+  syncTitle: { fontFamily: "Outfit_600SemiBold", fontSize: 14, color: C.text },
+  syncSubtitle: { fontFamily: "Outfit_400Regular", fontSize: 12, color: C.textMuted, marginTop: 2 },
 
   dangerBtn: { backgroundColor: "transparent", borderColor: "#ff4d4d" + "80" },
   dangerText: { color: "#ff4d4d" },

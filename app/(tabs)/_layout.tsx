@@ -63,7 +63,7 @@ function ClassicTabLayout() {
       }}
     >
       <Tabs.Screen name="index" options={{ title: "Today", tabBarIcon: makeTabIcon("index") }} />
-      <Tabs.Screen name="week" options={{ title: "Week", tabBarIcon: makeTabIcon("week") }} />
+      <Tabs.Screen name="week" options={{ title: "Weekly Plan", tabBarIcon: makeTabIcon("week") }} />
       <Tabs.Screen name="workouts" options={{ title: "Workouts", tabBarIcon: makeTabIcon("workouts") }} />
       <Tabs.Screen name="nutrition" options={{ title: "Nutrition", tabBarIcon: makeTabIcon("nutrition") }} />
 

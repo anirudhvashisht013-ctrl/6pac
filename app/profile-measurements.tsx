@@ -16,14 +16,23 @@ import { C } from "@/constants/colors";
 import { useAuth } from "@/context/AuthContext";
 
 import type { BodyMeasurementEntry, ISODate } from "@/lib/models";
+import { exportMeasurementsCsv } from "@/lib/export/measurementsCsv";
+import {
+  buildCadenceSlots,
+  deriveMonthKeys,
+  hasAnyNumeric,
+  latestRealEntryOnOrBefore,
+  monthKeyFromYMD,
+  prevRealEntryBefore,
+  resolveMeasurementAnchor,
+  slotStatus,
+  sortByDate,
+  type MeasurementSlot,
+  type SlotStatus,
+} from "@/lib/measurements/slots";
 import { presetRange } from "@/lib/ranges";
 import { measurementsRepo } from "@/lib/repos/measurementsRepo";
-import { addDays, todayYMD } from "@/lib/dates";
-
-type Slot = {
-  date: ISODate;
-  scheduledAt: Date; // includes anchor time (e.g., 06:15)
-};
+import { todayYMD } from "@/lib/dates";
 
 type MonthTab = { key: string; label: string };
 
@@ -31,41 +40,6 @@ const INCH_PER_CM = 0.3937007874;
 const cmToIn = (cm: number) => cm * INCH_PER_CM;
 const fmtIn = (n: number) => `${n.toFixed(1)} in`;
 const fmtPct = (n: number) => `${n.toFixed(1)}%`;
-
-function monthKeyFromYMD(ymd: string) {
-  // "YYYY-MM"
-  return ymd.slice(0, 7);
-}
-
-function ymdFromDate(d: Date): ISODate {
-  const y = d.getFullYear();
-  const m = `${d.getMonth() + 1}`.padStart(2, "0");
-  const day = `${d.getDate()}`.padStart(2, "0");
-  return `${y}-${m}-${day}` as ISODate;
-}
-
-function isISODate(x: any): x is ISODate {
-  return typeof x === "string" && /^\d{4}-\d{2}-\d{2}$/.test(x);
-}
-
-function parseAnyDate(v: any): Date | null {
-  if (!v) return null;
-  if (v instanceof Date) return v;
-  if (typeof v === "string") {
-    const d = new Date(v);
-    return isNaN(d.getTime()) ? null : d;
-  }
-  // Firestore Timestamp case: try toDate()
-  if (typeof v?.toDate === "function") {
-    try {
-      const d = v.toDate();
-      return d instanceof Date && !isNaN(d.getTime()) ? d : null;
-    } catch {
-      return null;
-    }
-  }
-  return null;
-}
 
 function formatMonthLabel(key: string) {
   // key: "YYYY-MM"
@@ -77,31 +51,6 @@ function formatMonthLabel(key: string) {
 
 function formatTime(d: Date) {
   return d.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" });
-}
-
-function hasAnyNumeric(e: BodyMeasurementEntry | null): boolean {
-  if (!e) return false;
-  const nums = [
-    e.waist,
-    e.chest,
-    e.shoulders,
-    e.armsR,
-    e.armsL,
-    e.thighR,
-    e.thighL,
-    e.bicepsR,
-    e.bicepsL,
-    e.bodyFatPercent,
-  ];
-  return nums.some((v) => typeof v === "number");
-}
-
-type SlotStatus = "done" | "upcoming" | "missed";
-
-function slotStatus(slot: Slot, entry: BodyMeasurementEntry | null, now: Date): SlotStatus {
-  if (entry && hasAnyNumeric(entry)) return "done";
-  if (slot.scheduledAt.getTime() > now.getTime()) return "upcoming";
-  return "missed";
 }
 
 function statusColor(s: SlotStatus) {
@@ -129,11 +78,7 @@ export default function ProfileMeasurementsScreen() {
     if (!user) return;
     setLoading(true);
     try {
-      const m = await measurementsRepo.getRange(
-        user.id,
-        measurementRange.start as any,
-        measurementRange.end as any
-      );
+      const m = await measurementsRepo.getRange(user.id, measurementRange.start, measurementRange.end);
       setMeasurements(m);
     } finally {
       setLoading(false);
@@ -147,7 +92,7 @@ export default function ProfileMeasurementsScreen() {
   );
 
   const sortedEntries = useMemo(() => {
-    return [...measurements].sort((a, b) => a.date.localeCompare(b.date));
+    return sortByDate(measurements);
   }, [measurements]);
 
   const byDate = useMemo(() => {
@@ -156,70 +101,14 @@ export default function ProfileMeasurementsScreen() {
     return map;
   }, [sortedEntries]);
 
-  // Anchor: first real entry timestamp if available, else default to first entry date @ 06:15.
-  const anchor = useMemo<Date | null>(() => {
-    if (sortedEntries.length === 0) return null;
+  const anchor = useMemo<Date | null>(() => resolveMeasurementAnchor(sortedEntries), [sortedEntries]);
 
-    // find first entry that has any numeric value
-    const firstReal = sortedEntries.find((e) => hasAnyNumeric(e)) || sortedEntries[0];
-
-    const dFromLogged = parseAnyDate((firstReal as any).loggedAt);
-    const dFromCreated = parseAnyDate((firstReal as any).createdAt);
-
-    const base = dFromLogged || dFromCreated;
-    if (base) return base;
-
-    // fallback: date string @ 06:15
-    const ymd = firstReal.date;
-    const fallback = new Date(`${ymd}T06:15:00`);
-    return isNaN(fallback.getTime()) ? null : fallback;
-  }, [sortedEntries]);
-
-  const slots = useMemo<Slot[]>(() => {
-    if (!anchor) return [];
-
-    // Build cadence slots from anchor onwards (never earlier)
-    const start = new Date(anchor);
-    const end = new Date(`${measurementRange.end}T23:59:59`);
-
-    const anchorH = start.getHours();
-    const anchorM = start.getMinutes();
-
-    const list: Slot[] = [];
-
-    let t = new Date(start);
-    t.setSeconds(0, 0);
-    t.setHours(anchorH, anchorM, 0, 0);
-
-    let guard = 0;
-    while (t.getTime() <= end.getTime() && guard < 220) {
-      list.push({ date: ymdFromDate(t), scheduledAt: new Date(t) });
-      t = addDays(t, 15);
-      guard++;
-    }
-
-    // Always include "next upcoming" slot after the last, so user sees next due.
-    if (list.length > 0) {
-      const last = list[list.length - 1];
-      if (last.scheduledAt.getTime() < Date.now()) {
-        const next = addDays(last.scheduledAt, 15);
-        list.push({ date: ymdFromDate(next), scheduledAt: next });
-      }
-    }
-
-    return list;
+  const slots = useMemo<MeasurementSlot[]>(() => {
+    return buildCadenceSlots(anchor, measurementRange.end);
   }, [anchor, measurementRange.end]);
 
   const months = useMemo<MonthTab[]>(() => {
-    if (!anchor) {
-      // First-time UX: just show current month
-      const key = monthKeyFromYMD(todayYMD());
-      return [{ key, label: formatMonthLabel(key) }];
-    }
-
-    const keys = Array.from(new Set(slots.map((s) => monthKeyFromYMD(s.date))));
-    keys.sort();
-
+    const keys = deriveMonthKeys(anchor, slots, todayYMD());
     return keys.map((k) => ({ key: k, label: formatMonthLabel(k) }));
   }, [anchor, slots]);
 
@@ -249,127 +138,17 @@ export default function ProfileMeasurementsScreen() {
     return null;
   }, [anchor, slots, byDate]);
 
-  function prevRealEntryBefore(date: ISODate): BodyMeasurementEntry | null {
-    const idx = sortedEntries.findIndex((e) => e.date === date);
-    if (idx <= 0) return null;
-
-    for (let i = idx - 1; i >= 0; i--) {
-      const e = sortedEntries[i];
-      if (hasAnyNumeric(e)) return e;
-    }
-    return null;
-  }
-
-  function latestRealEntryOnOrBefore(date: ISODate): BodyMeasurementEntry | null {
-    for (let i = sortedEntries.length - 1; i >= 0; i--) {
-      const e = sortedEntries[i];
-      if (e.date <= date && hasAnyNumeric(e)) return e;
-    }
-    return null;
-  }
-
   const exportCSV = useCallback(async () => {
     if (!anchor) return;
-
-    // Build CSV rows from REAL entries only (skip pure-missed placeholders)
-    const rows = sortedEntries
-      .filter((e) => hasAnyNumeric(e))
-      .map((e) => {
-        const loggedAt = parseAnyDate((e as any).loggedAt) || parseAnyDate((e as any).createdAt);
-        const loggedAtIso = loggedAt ? loggedAt.toISOString() : "";
-
-        const pickInches = (v: number | null) => (typeof v === "number" ? (v * INCH_PER_CM).toFixed(2) : "");
-        const pickPct = (v: number | null) => (typeof v === "number" ? v.toFixed(2) : "");
-
-        return [
-          e.date,
-          loggedAtIso,
-          pickInches(e.waist),
-          pickInches(e.chest),
-          pickInches(e.shoulders),
-          pickInches(e.armsR),
-          pickInches(e.armsL),
-          pickInches(e.thighR),
-          pickInches(e.thighL),
-          pickInches(e.bicepsR),
-          pickInches(e.bicepsL),
-          pickPct(e.bodyFatPercent),
-          (e.notes || "").replace(/\n/g, " ").replace(/,/g, " "),
-        ];
-      });
-
-    const header = [
-      "scheduled_date",
-      "logged_at",
-      "waist_in",
-      "chest_in",
-      "shoulders_in",
-      "armsR_in",
-      "armsL_in",
-      "thighR_in",
-      "thighL_in",
-      "bicepsR_in",
-      "bicepsL_in",
-      "bodyFatPercent",
-      "notes",
-    ];
-
-    const csv =
-      [header, ...rows]
-        .map((r) => r.map((x) => `"${String(x ?? "").replace(/"/g, '""')}"`).join(","))
-        .join("\n") + "\n";
-
-    if (Platform.OS === "web") {
-      // Web: download
-      const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement("a");
-      a.href = url;
-      a.download = `sixpac-body-measurements-${new Date().toISOString().slice(0, 10)}.csv`;
-      a.click();
-      URL.revokeObjectURL(url);
-      return;
-    }
-
-    // Native: share file (typed safely for TS)
-    try {
-      const FSMod: any = await import("expo-file-system");
-      const SharingMod: any = await import("expo-sharing");
-
-      const FileSystem = FSMod?.default ?? FSMod;
-      const Sharing = SharingMod?.default ?? SharingMod;
-
-      const filename = `sixpac-body-measurements-${new Date().toISOString().slice(0, 10)}.csv`;
-      const baseDir = FileSystem.cacheDirectory || FileSystem.documentDirectory;
-      const path = `${baseDir}${filename}`;
-
-      await FileSystem.writeAsStringAsync(path, csv, {
-        encoding: FileSystem.EncodingType?.UTF8 ?? "utf8",
-      });
-
-      if (await Sharing.isAvailableAsync()) {
-        await Sharing.shareAsync(path, {
-          mimeType: "text/csv",
-          dialogTitle: "Export Measurements CSV",
-        });
-      }
-    } catch {
-      // ignore
-    }
+    await exportMeasurementsCsv(sortedEntries);
   }, [anchor, sortedEntries]);
 
   const onLogForSlot = useCallback(
-    (slot: Slot) => {
+    (slot: MeasurementSlot) => {
       // No early logging (future slot)
       if (slot.scheduledAt.getTime() > Date.now()) return;
 
-      // push with params without fighting typed routes
-      router.push(
-        ({
-          pathname: "/measurements",
-          params: { scheduledYMD: slot.date },
-        } as any)
-      );
+      router.push({ pathname: "/measurements", params: { scheduledYMD: slot.date } });
     },
     []
   );
@@ -426,7 +205,7 @@ export default function ProfileMeasurementsScreen() {
 
             <Pressable
               style={({ pressed }) => [styles.primaryBtn, pressed && { opacity: 0.85 }]}
-              onPress={() => router.push("/measurements" as any)}
+              onPress={() => router.push("/measurements")}
             >
               <Text style={styles.primaryBtnText}>Log First Measurement</Text>
             </Pressable>
@@ -546,7 +325,9 @@ export default function ProfileMeasurementsScreen() {
                   // current entry might be missed placeholder (all null). treat as null for display.
                   const showEntry = entry && hasAnyNumeric(entry) ? entry : null;
 
-                  const prev = showEntry ? prevRealEntryBefore(showEntry.date) : latestRealEntryOnOrBefore(slot.date);
+                  const prev = showEntry
+                    ? prevRealEntryBefore(sortedEntries, showEntry.date)
+                    : latestRealEntryOnOrBefore(sortedEntries, slot.date);
 
                   const trendLine = (label: string, cur: number | null, prevVal: number | null, kind: "in" | "pct") => {
                     const hasCur = typeof cur === "number";

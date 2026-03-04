@@ -1,7 +1,7 @@
 import React, { useState, useCallback } from 'react';
 import {
   View, Text, ScrollView, StyleSheet, Pressable,
-  ActivityIndicator, Alert, Platform,
+  ActivityIndicator, Platform,
 } from 'react-native';
 import { useFocusEffect, router } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -9,14 +9,21 @@ import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
 import * as Haptics from 'expo-haptics';
 import { C } from '@/constants/colors';
 import { useAuth } from '@/context/AuthContext';
+import { useFeedbackToast } from '@/context/FeedbackToastContext';
 import { workoutsRepo, schedulesRepo, sessionsRepo } from '@/lib/storage';
 import { getMondayYMD, todayYMD } from '@/lib/dates';
 import type { WorkoutTemplate, WeekSchedule, WorkoutSession } from '@/lib/types';
 import * as Crypto from 'expo-crypto';
 
+function latestByStartedAt(sessions: WorkoutSession[]): WorkoutSession | null {
+  if (sessions.length === 0) return null;
+  return [...sessions].sort((a, b) => b.startedAt.localeCompare(a.startedAt))[0] || null;
+}
+
 export default function WorkoutsScreen() {
   const insets = useSafeAreaInsets();
   const { user } = useAuth();
+  const { showUndoToast } = useFeedbackToast();
   const today = todayYMD();
 
   const [templates, setTemplates] = useState<WorkoutTemplate[]>([]);
@@ -46,19 +53,47 @@ export default function WorkoutsScreen() {
   const todayTemplate = todaySchedule?.workoutTemplateId
     ? templates.find(t => t.id === todaySchedule.workoutTemplateId) || null
     : null;
+  const hasCompletedTodaySession = todaySessions.some((session) => session.completed);
+
+  const activeTodaySessionForTemplate = (templateId: string) =>
+    latestByStartedAt(
+      todaySessions.filter((session) => !session.completed && session.workoutTemplateId === templateId)
+    );
 
   const handleDeleteTemplate = (id: string, name: string) => {
-    Alert.alert('Delete Workout', `Delete "${name}"?`, [
-      { text: 'Cancel', style: 'cancel' },
-      {
-        text: 'Delete', style: 'destructive', onPress: async () => {
-          if (!user) return;
+    if (!user) return;
+
+    const deletedTemplate = templates.find((template) => template.id === id);
+    if (!deletedTemplate) return;
+    const deletedIndex = templates.findIndex((template) => template.id === id);
+
+    const restoreTemplate = () => {
+      setTemplates((prev) => {
+        if (prev.some((template) => template.id === deletedTemplate.id)) return prev;
+        const next = [...prev];
+        next.splice(Math.min(Math.max(deletedIndex, 0), next.length), 0, deletedTemplate);
+        return next;
+      });
+    };
+
+    setTemplates((prev) => prev.filter((template) => template.id !== id));
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+
+    showUndoToast({
+      message: `${name} deleted`,
+      durationMs: 10000,
+      onUndo: restoreTemplate,
+      onCommit: async () => {
+        try {
           await workoutsRepo.delete(user.id, id);
-          Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
-          load();
+          await load();
+        } catch (error) {
+          restoreTemplate();
+          throw error;
         }
-      }
-    ]);
+      },
+      onCommitErrorMessage: 'Unable to delete workout. Please try again.',
+    });
   };
 
   const startWorkout = async (template: WorkoutTemplate) => {
@@ -68,19 +103,39 @@ export default function WorkoutsScreen() {
       id: Crypto.randomUUID(),
       date: today,
       workoutTemplateId: template.id,
-      workoutNameSnapshot: template.name,
-      startedAt: now,
-      endedAt: null,
-      completed: false,
-      blockPerformances: template.blocks.map(b => ({
-        blockId: b.id,
+        workoutNameSnapshot: template.name,
+        startedAt: now,
+        endedAt: null,
         completed: false,
-        ...(b.type === 'gym' && b.sets ? { sets: Array.from({ length: b.sets }, () => ({ weight: null, reps: null, completed: false })) } : {}),
-        ...(b.type === 'cardio' ? { minutesCompleted: 0 } : {}),
-      })),
-    };
+        blockPerformances: template.blocks.map(b => ({
+          blockId: b.id,
+          completed: false,
+          ...(b.type === 'gym'
+            ? {
+                sets: Array.from(
+                  { length: Math.max(1, b.sets || 1) },
+                  () => ({ weight: null, reps: null, completed: false })
+                ),
+              }
+            : {}),
+          ...(b.type === 'cardio' ? { minutesCompleted: 0 } : {}),
+        })),
+      };
     await sessionsRepo.save(user.id, session);
     router.push({ pathname: '/player', params: { sessionId: session.id } });
+  };
+
+  const resumeWorkout = (sessionId: string) => {
+    router.push({ pathname: '/player', params: { sessionId } });
+  };
+
+  const startOrResumeWorkout = async (template: WorkoutTemplate) => {
+    const active = activeTodaySessionForTemplate(template.id);
+    if (active) {
+      resumeWorkout(active.id);
+      return;
+    }
+    await startWorkout(template);
   };
 
   const blockCount = (t: WorkoutTemplate) => {
@@ -124,7 +179,7 @@ export default function WorkoutsScreen() {
 
         {todayTemplate && (
           <View style={styles.todaySection}>
-            <Text style={styles.todaySectionTitle}>Today's Workout</Text>
+            <Text style={styles.todaySectionTitle}>Today&apos;s Workout</Text>
             <View style={styles.todayCard}>
               <View style={styles.todayCardHeader}>
                 <View style={styles.todayCardLeft}>
@@ -144,11 +199,15 @@ export default function WorkoutsScreen() {
               ) : (
                 <Pressable
                   style={({ pressed }) => [styles.startBtn, pressed && { opacity: 0.85 }]}
-                  onPress={() => startWorkout(todayTemplate)}
+                  onPress={() => startOrResumeWorkout(todayTemplate)}
                 >
                   <Ionicons name="play" size={16} color={C.bg} />
                   <Text style={styles.startBtnText}>
-                    {todaySessions.some(s => s.completed) ? 'Start Again' : 'Start Workout'}
+                    {activeTodaySessionForTemplate(todayTemplate.id)
+                      ? 'Resume Workout'
+                      : hasCompletedTodaySession
+                        ? 'Start Again'
+                        : 'Start Workout'}
                   </Text>
                 </Pressable>
               )}
@@ -194,7 +253,7 @@ export default function WorkoutsScreen() {
               <View style={styles.templateRight}>
                 <Pressable
                   style={({ pressed }) => [styles.playBtn, !isWeekReady && styles.playBtnDisabled, pressed && { opacity: 0.8 }]}
-                  onPress={() => isWeekReady && startWorkout(t)}
+                  onPress={() => isWeekReady && startOrResumeWorkout(t)}
                 >
                   <Ionicons name="play" size={14} color={isWeekReady ? C.bg : C.textMuted} />
                 </Pressable>

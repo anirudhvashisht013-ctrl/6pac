@@ -1,0 +1,1 @@
+export const MAX_REFERENCE_VIDEO_URLS = 5;

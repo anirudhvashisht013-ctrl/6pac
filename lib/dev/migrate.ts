@@ -9,6 +9,7 @@ export type MigrationResult = {
   mealsMigrated: number;
   sessionsMigrated: number;
   templatesMigrated: number;
+  exercisesMigrated: number;
   targetsMigrated: number;
   schedulesMigrated: number;
   measurementsMigrated: number;
@@ -43,6 +44,7 @@ export async function migrateAllDataToCloud(uid: string): Promise<MigrationResul
     mealsMigrated: 0,
     sessionsMigrated: 0,
     templatesMigrated: 0,
+    exercisesMigrated: 0,
     targetsMigrated: 0,
     schedulesMigrated: 0,
     measurementsMigrated: 0,
@@ -95,6 +97,16 @@ export async function migrateAllDataToCloud(uid: string): Promise<MigrationResul
       }
     }
 
+    for (const exercise of snapshot.exercises) {
+      try {
+        await cloudMirrorRepo.upsertExercise(uid, exercise);
+        result.exercisesMigrated += 1;
+      } catch (e) {
+        failures += 1;
+        console.error(`Failed to migrate exercise ${exercise.id}:`, e);
+      }
+    }
+
     for (const target of snapshot.targets) {
       try {
         await cloudMirrorRepo.upsertTarget(uid, target);
@@ -130,6 +142,7 @@ export async function migrateAllDataToCloud(uid: string): Promise<MigrationResul
       result.mealsMigrated +
       result.sessionsMigrated +
       result.templatesMigrated +
+      result.exercisesMigrated +
       result.targetsMigrated +
       result.schedulesMigrated +
       result.measurementsMigrated;
@@ -138,12 +151,8 @@ export async function migrateAllDataToCloud(uid: string): Promise<MigrationResul
       result.status = "partial";
       result.error = `${failures} items failed to migrate`;
     } else {
-      result.status = "success";
+      await AsyncStorage.setItem(MIGRATION_KEY(uid), result.timestamp);
     }
-
-    // Always mark migration as attempted (even on partial failure)
-    // to prevent infinite retry loops
-    await AsyncStorage.setItem(MIGRATION_KEY(uid), result.timestamp);
 
     console.log("Migration completed:", result);
     return result;

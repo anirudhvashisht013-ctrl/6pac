@@ -1,7 +1,7 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import type {
   User, DailyLog, MealEntry, WeeklyTarget,
-  WeekSchedule, WorkoutTemplate, WorkoutSession, BodyMeasurementEntry
+  WeekSchedule, WorkoutTemplate, WorkoutSession, BodyMeasurementEntry, ExerciseLibraryItem
 } from './types';
 import { cloudMirrorRepo } from "@/lib/repos/cloudMirrorRepo";
 import { measurementDocId, normalizeMeasurementEntry } from "@/lib/measurements/identity";
@@ -18,6 +18,7 @@ const KEY = {
   targets: (uid: string) => `@6pac:targets:${uid}`,
   schedules: (uid: string) => `@6pac:schedules:${uid}`,
   templates: (uid: string) => `@6pac:templates:${uid}`,
+  exercises: (uid: string) => `@6pac:exercises:${uid}`,
   meals: (uid: string) => `@6pac:meals:${uid}`,
   sessions: (uid: string) => `@6pac:sessions:${uid}`,
   measurements: (uid: string) => `@6pac:measurements:${uid}`,
@@ -45,18 +46,20 @@ export type LocalDataSnapshot = {
   targets: WeeklyTarget[];
   schedules: WeekSchedule[];
   templates: WorkoutTemplate[];
+  exercises: ExerciseLibraryItem[];
   sessions: WorkoutSession[];
   measurements: BodyMeasurementEntry[];
 };
 
 export const localCacheRepo = {
   async getSnapshot(uid: string): Promise<LocalDataSnapshot> {
-    const [logs, meals, targets, schedules, templates, sessions, measurements] = await Promise.all([
+    const [logs, meals, targets, schedules, templates, exercises, sessions, measurements] = await Promise.all([
       get<DailyLog[]>(KEY.logs(uid)),
       get<MealEntry[]>(KEY.meals(uid)),
       get<WeeklyTarget[]>(KEY.targets(uid)),
       get<WeekSchedule[]>(KEY.schedules(uid)),
       get<WorkoutTemplate[]>(KEY.templates(uid)),
+      get<ExerciseLibraryItem[]>(KEY.exercises(uid)),
       get<WorkoutSession[]>(KEY.sessions(uid)),
       get<BodyMeasurementEntry[]>(KEY.measurements(uid)),
     ]);
@@ -67,6 +70,7 @@ export const localCacheRepo = {
       targets: targets || [],
       schedules: schedules || [],
       templates: templates || [],
+      exercises: exercises || [],
       sessions: sessions || [],
       measurements: measurements || [],
     };
@@ -79,6 +83,7 @@ export const localCacheRepo = {
       set(KEY.targets(uid), data.targets),
       set(KEY.schedules(uid), data.schedules),
       set(KEY.templates(uid), data.templates),
+      set(KEY.exercises(uid), data.exercises),
       set(KEY.sessions(uid), data.sessions),
       set(KEY.measurements(uid), data.measurements),
     ]);
@@ -202,6 +207,29 @@ export const workoutsRepo = {
     const all = await this.getAll(uid);
     await set(KEY.templates(uid), all.filter(t => t.id !== id));
     mirrorBestEffort(cloudMirrorRepo.deleteTemplate(uid, id), `templates/${id}:delete`);
+  },
+};
+
+export const exercisesRepo = {
+  async getAll(uid: string): Promise<ExerciseLibraryItem[]> {
+    return (await get<ExerciseLibraryItem[]>(KEY.exercises(uid))) || [];
+  },
+  async getById(uid: string, id: string): Promise<ExerciseLibraryItem | null> {
+    const all = await this.getAll(uid);
+    return all.find((exercise) => exercise.id === id) || null;
+  },
+  async save(uid: string, exercise: ExerciseLibraryItem): Promise<void> {
+    const all = await this.getAll(uid);
+    const idx = all.findIndex((item) => item.id === exercise.id);
+    if (idx >= 0) all[idx] = exercise;
+    else all.push(exercise);
+    await set(KEY.exercises(uid), all);
+    mirrorBestEffort(cloudMirrorRepo.upsertExercise(uid, exercise), `exercises/${exercise.id}`);
+  },
+  async delete(uid: string, id: string): Promise<void> {
+    const all = await this.getAll(uid);
+    await set(KEY.exercises(uid), all.filter((exercise) => exercise.id !== id));
+    mirrorBestEffort(cloudMirrorRepo.deleteExercise(uid, id), `exercises/${id}:delete`);
   },
 };
 

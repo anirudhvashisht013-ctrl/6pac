@@ -1,6 +1,6 @@
 // app/(tabs)/profile.tsx
 import React, { useCallback, useState } from "react";
-import { Alert, View, Text, ScrollView, StyleSheet, Pressable, ActivityIndicator, Platform } from "react-native";
+import { Alert, View, Text, ScrollView, StyleSheet, Pressable, ActivityIndicator, Platform, Modal } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
 import { useFocusEffect, router } from "expo-router";
@@ -10,10 +10,10 @@ import { useAuth } from "@/context/AuthContext";
 import { getUserProfile } from "@/lib/userProfile";
 import { confirm } from "@/lib/ui/confirm";
 import { seedTestUser } from "@/lib/seed";
-import { getMigrationStatus, migrateAllDataToCloud } from "@/lib/dev/migrate";
-import { exportAsCSVFile, exportAsJSONFile } from "@/lib/export";
+import { exportAsCSVFile } from "@/lib/export";
 import { useMirrorSyncState } from "@/lib/sync/mirrorQueue";
 import { useNetworkStatus } from "@/lib/network";
+import { syncNow } from "@/lib/sync/syncNow";
 
 type ProfileDoc = {
   email?: string;
@@ -31,23 +31,17 @@ export default function ProfileHubScreen() {
   const [profile, setProfile] = useState<ProfileDoc | null>(null);
   const [loadingProfile, setLoadingProfile] = useState(true);
   const [seeding, setSeeding] = useState(false);
-  const [migrating, setMigrating] = useState(false);
-  const [migrationStatus, setMigrationStatus] = useState<{
-    migrated: boolean;
-    migratedAt: string | null;
-  }>({ migrated: false, migratedAt: null });
-  const [exportingJson, setExportingJson] = useState(false);
   const [exportingCsv, setExportingCsv] = useState(false);
+  const [showLogoutModal, setShowLogoutModal] = useState(false);
+  const [logoutSyncing, setLogoutSyncing] = useState(false);
+  const [logoutError, setLogoutError] = useState<string | null>(null);
   const logoutColor = C.error;
 
   const loadProfile = useCallback(async () => {
     if (!user) return;
     setLoadingProfile(true);
     try {
-      const [p, migration] = await Promise.all([
-        getUserProfile(user.id),
-        getMigrationStatus(user.id),
-      ]);
+      const p = await getUserProfile(user.id);
       if (!p) {
         setProfile(null);
       } else {
@@ -58,7 +52,6 @@ export default function ProfileHubScreen() {
           sex: p.sex,
         });
       }
-      setMigrationStatus(migration);
     } finally {
       setLoadingProfile(false);
     }
@@ -91,19 +84,6 @@ export default function ProfileHubScreen() {
     }
   }, [user]);
 
-  const onExportJson = useCallback(async () => {
-    if (!user) return;
-    try {
-      setExportingJson(true);
-      await exportAsJSONFile(user.id);
-      Alert.alert("Export Complete", "JSON export is ready.");
-    } catch (error) {
-      Alert.alert("Export Failed", String(error));
-    } finally {
-      setExportingJson(false);
-    }
-  }, [user]);
-
   const onExportCsv = useCallback(async () => {
     if (!user) return;
     try {
@@ -117,30 +97,34 @@ export default function ProfileHubScreen() {
     }
   }, [user]);
 
-  const onMigrate = useCallback(async () => {
+  const onLogoutPress = useCallback(() => {
+    setLogoutError(null);
+    setShowLogoutModal(true);
+  }, []);
+
+  const onConfirmLogout = useCallback(async () => {
     if (!user) return;
+
     try {
-      setMigrating(true);
-      const result = await migrateAllDataToCloud(user.id);
-      const message =
-        result.status === "success"
-          ? `${result.total} items uploaded to cloud`
-          : result.status === "partial"
-            ? `${result.total} items uploaded, but some failed (${result.error || "partial"})`
-            : result.error || "Migration failed";
+      setLogoutError(null);
+      setLogoutSyncing(true);
 
-      Alert.alert(
-        result.status === "error" ? "Migration Failed" : "Migration Complete",
-        message
-      );
-      setMigrationStatus(await getMigrationStatus(user.id));
-    } catch (error) {
-      Alert.alert("Migration Failed", String(error));
+      if (sync.pendingCount > 0) {
+        if (!network.isOnline) {
+          setLogoutError("You're offline right now. Reconnect once so we can sync your latest data before logout.");
+          return;
+        }
+        await syncNow(user.id);
+      }
+
+      await logout();
+      setShowLogoutModal(false);
+    } catch {
+      setLogoutError("Couldn't finish logout right now. Please try again.");
     } finally {
-      setMigrating(false);
+      setLogoutSyncing(false);
     }
-  }, [user]);
-
+  }, [logout, network.isOnline, sync.pendingCount, user]);
   const displayName = profile?.fullName || "—";
   const displayEmail = user?.email || profile?.email || "—";
   const displaySex = profile?.sex || "—";
@@ -157,13 +141,6 @@ export default function ProfileHubScreen() {
       : sync.lastSyncedAt
         ? `Last synced ${new Date(sync.lastSyncedAt).toLocaleString()}`
         : "No pending changes";
-  const migrationTitle =
-    migrationStatus.migrated && migrationStatus.migratedAt
-      ? `Last migrated at ${new Date(migrationStatus.migratedAt).toLocaleString()}`
-      : "Not migrated yet";
-  const migrationSubtitle = migrationStatus.migrated
-    ? "Local data backup to cloud completed."
-    : 'Run "Backup Data to Cloud" to upload existing local data.';
 
   return (
     <View style={{ flex: 1, backgroundColor: C.bg }}>
@@ -247,6 +224,22 @@ export default function ProfileHubScreen() {
           <Ionicons name="chevron-forward" size={18} color={C.textMuted} />
         </Pressable>
 
+        <Pressable
+          style={({ pressed }) => [styles.navRow, pressed && { opacity: 0.9 }]}
+          onPress={() => router.push("/exercises" as any)}
+        >
+          <View style={styles.navLeft}>
+            <View style={styles.navIconWrap}>
+              <Ionicons name="barbell-outline" size={18} color={C.primary} />
+            </View>
+            <View style={{ flex: 1 }}>
+              <Text style={styles.navTitle}>Exercises</Text>
+              <Text style={styles.navSub}>Library, alternatives, and metadata</Text>
+            </View>
+          </View>
+          <Ionicons name="chevron-forward" size={18} color={C.textMuted} />
+        </Pressable>
+
         <Text style={styles.sectionTitle}>Account</Text>
 
         <View style={styles.syncCard}>
@@ -275,30 +268,7 @@ export default function ProfileHubScreen() {
           </View>
         </View>
 
-        <View style={styles.syncCard}>
-          <View style={styles.syncCardLeft}>
-            <Ionicons
-              name={migrationStatus.migrated ? "cloud-done-outline" : "cloud-upload-outline"}
-              size={18}
-              color={migrationStatus.migrated ? C.success : C.warning}
-            />
-            <View style={{ flex: 1 }}>
-              <Text style={styles.syncTitle}>{migrationTitle}</Text>
-              <Text style={styles.syncSubtitle}>{migrationSubtitle}</Text>
-            </View>
-          </View>
-        </View>
-
         <View style={styles.actionsWrap}>
-          <Pressable
-            style={({ pressed }) => [styles.actionBtn, pressed && { opacity: 0.85 }]}
-            onPress={onExportJson}
-            disabled={exportingJson}
-          >
-            <Ionicons name="download-outline" size={16} color={C.primary} />
-            <Text style={styles.actionBtnText}>{exportingJson ? "Exporting..." : "Export JSON"}</Text>
-          </Pressable>
-
           <Pressable
             style={({ pressed }) => [styles.actionBtn, pressed && { opacity: 0.85 }]}
             onPress={onExportCsv}
@@ -306,15 +276,6 @@ export default function ProfileHubScreen() {
           >
             <Ionicons name="document-text-outline" size={16} color={C.primary} />
             <Text style={styles.actionBtnText}>{exportingCsv ? "Exporting..." : "Export CSV"}</Text>
-          </Pressable>
-
-          <Pressable
-            style={({ pressed }) => [styles.actionBtn, pressed && { opacity: 0.85 }]}
-            onPress={onMigrate}
-            disabled={migrating}
-          >
-            <Ionicons name="cloud-upload-outline" size={16} color={C.primary} />
-            <Text style={styles.actionBtnText}>{migrating ? "Migrating..." : "Backup Data to Cloud"}</Text>
           </Pressable>
 
           <Pressable
@@ -328,13 +289,59 @@ export default function ProfileHubScreen() {
 
           <Pressable
             style={({ pressed }) => [styles.actionBtn, styles.dangerBtn, pressed && { opacity: 0.85 }]}
-            onPress={logout}
+            onPress={onLogoutPress}
           >
             <Ionicons name="log-out-outline" size={16} color={logoutColor} />
             <Text style={[styles.actionBtnText, styles.dangerText]}>Logout</Text>
           </Pressable>
         </View>
       </ScrollView>
+
+      <Modal
+        visible={showLogoutModal}
+        transparent
+        animationType="fade"
+        onRequestClose={() => {
+          if (!logoutSyncing) setShowLogoutModal(false);
+        }}
+      >
+        <View style={styles.logoutModalOverlay}>
+          <View style={styles.logoutModalCard}>
+            <Text style={styles.logoutModalTitle}>Leaving for now?</Text>
+            <Text style={styles.logoutModalText}>
+              You can always come back. We&apos;ll make sure your latest changes are synced before you logout.
+            </Text>
+
+            {logoutSyncing ? (
+              <View style={styles.logoutSyncRow}>
+                <ActivityIndicator size="small" color={C.primary} />
+                <Text style={styles.logoutSyncText}>Syncing your data...</Text>
+              </View>
+            ) : null}
+
+            {logoutError ? <Text style={styles.logoutErrorText}>{logoutError}</Text> : null}
+
+            <View style={styles.logoutActions}>
+              <Pressable
+                style={({ pressed }) => [styles.logoutCancelBtn, pressed && { opacity: 0.85 }]}
+                onPress={() => setShowLogoutModal(false)}
+                disabled={logoutSyncing}
+              >
+                <Text style={styles.logoutCancelText}>Cancel</Text>
+              </Pressable>
+              <Pressable
+                style={({ pressed }) => [styles.logoutConfirmBtn, pressed && { opacity: 0.85 }, logoutSyncing && { opacity: 0.65 }]}
+                onPress={onConfirmLogout}
+                disabled={logoutSyncing}
+              >
+                <Text style={styles.logoutConfirmText}>
+                  {sync.pendingCount > 0 ? "Sync & Logout" : "Logout"}
+                </Text>
+              </Pressable>
+            </View>
+          </View>
+        </View>
+      </Modal>
     </View>
   );
 }
@@ -460,4 +467,85 @@ const styles = StyleSheet.create({
 
   dangerBtn: { backgroundColor: "transparent", borderColor: "#ff4d4d" + "80" },
   dangerText: { color: "#ff4d4d" },
+  logoutModalOverlay: {
+    flex: 1,
+    backgroundColor: "rgba(0,0,0,0.55)",
+    alignItems: "center",
+    justifyContent: "center",
+    padding: 20,
+  },
+  logoutModalCard: {
+    width: "100%",
+    maxWidth: 420,
+    backgroundColor: C.surface,
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: C.border,
+    padding: 18,
+    gap: 12,
+  },
+  logoutModalTitle: {
+    fontFamily: "Outfit_700Bold",
+    fontSize: 20,
+    color: C.text,
+  },
+  logoutModalText: {
+    fontFamily: "Outfit_400Regular",
+    fontSize: 14,
+    color: C.textMuted,
+    lineHeight: 20,
+  },
+  logoutSyncRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+    backgroundColor: C.primaryBg,
+    borderWidth: 1,
+    borderColor: C.primary + "40",
+    borderRadius: 10,
+    paddingHorizontal: 10,
+    paddingVertical: 9,
+  },
+  logoutSyncText: {
+    fontFamily: "Outfit_500Medium",
+    fontSize: 13,
+    color: C.primary,
+  },
+  logoutErrorText: {
+    fontFamily: "Outfit_500Medium",
+    fontSize: 13,
+    color: C.error,
+  },
+  logoutActions: {
+    flexDirection: "row",
+    justifyContent: "flex-end",
+    gap: 10,
+    marginTop: 6,
+  },
+  logoutCancelBtn: {
+    borderWidth: 1,
+    borderColor: C.border,
+    backgroundColor: C.surface2,
+    borderRadius: 10,
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+  },
+  logoutCancelText: {
+    fontFamily: "Outfit_600SemiBold",
+    fontSize: 13,
+    color: C.textSecondary,
+  },
+  logoutConfirmBtn: {
+    borderWidth: 1,
+    borderColor: "#ff4d4d" + "80",
+    backgroundColor: "#ff4d4d" + "14",
+    borderRadius: 10,
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+  },
+  logoutConfirmText: {
+    fontFamily: "Outfit_600SemiBold",
+    fontSize: 13,
+    color: "#ff4d4d",
+  },
 });

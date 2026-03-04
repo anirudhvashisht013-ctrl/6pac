@@ -3,6 +3,7 @@ import React, { useMemo } from 'react';
 import { View, Text, StyleSheet, Pressable, Image, LayoutAnimation, Platform, UIManager } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { C } from '@/constants/colors';
+import { MAX_REFERENCE_VIDEO_URLS } from '@/lib/exercises/constants';
 import type { ReferenceVideoMeta } from '@/lib/youtube';
 import FloatingYouTubePlayer from '@/components/FloatingYouTubePlayer';
 
@@ -25,7 +26,7 @@ export default function ReferenceVideosSection({
   onPlay: (url: string) => void;
   onClose: () => void;
 }) {
-  const cleanUrls = useMemo(() => urls.filter(Boolean).slice(0, 3), [urls]);
+  const cleanUrls = useMemo(() => urls.filter(Boolean).slice(0, MAX_REFERENCE_VIDEO_URLS), [urls]);
 
   if (cleanUrls.length === 0) return null;
 

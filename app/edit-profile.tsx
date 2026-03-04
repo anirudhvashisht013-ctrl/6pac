@@ -16,12 +16,14 @@ import { Ionicons } from "@expo/vector-icons";
 import { router } from "expo-router";
 import { C } from "@/constants/colors";
 import { useAuth } from "@/context/AuthContext";
+import { useFeedbackToast } from "@/context/FeedbackToastContext";
 import { getUserProfile, updateUserProfile } from "@/lib/userProfile";
 import { confirm } from "@/lib/ui/confirm";
 
 export default function EditProfileScreen() {
   const insets = useSafeAreaInsets();
   const { user } = useAuth();
+  const { showToast } = useFeedbackToast();
 
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -90,17 +92,14 @@ export default function EditProfileScreen() {
     try {
       setSaving(true);
       await updateUserProfile(user.id, { fullName: name });
+      showToast({ message: "Profile updated", tone: "success" });
       router.back();
-    } catch (e) {
-      if (Platform.OS === "web") {
-        window.alert("Save failed. Please try again.");
-      } else {
-        Alert.alert("Save failed", "Please try again.");
-      }
+    } catch {
+      showToast({ message: "Unable to save profile. Please try again.", tone: "error" });
     } finally {
       setSaving(false);
     }
-  }, [user, fullName]);
+  }, [user, fullName, showToast]);
 
   return (
     <KeyboardAvoidingView

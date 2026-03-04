@@ -20,6 +20,7 @@ import { ensureAutoBackupOnce } from "@/lib/backup/autoBackupOnce";
 import { reconcileCloudToLocal } from "@/lib/sync/reconcile";
 import { syncNow } from "@/lib/sync/syncNow";
 import { getIsOnline, subscribeNetworkStatus } from "@/lib/network";
+import { ensureExerciseLibraryInitialized } from "@/lib/exercises/libraryService";
 
 type AppUser = {
   id: string; // Firebase uid
@@ -95,6 +96,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           await reconcileCloudToLocal(uid);
         } catch (e) {
           console.warn("cloud->local reconcile failed", e);
+        }
+
+        try {
+          await ensureExerciseLibraryInitialized(uid);
+        } catch (e) {
+          console.warn("exercise library bootstrap failed", e);
         }
 
         // Read profile to determine onboardingDone

@@ -10,9 +10,9 @@ import * as Haptics from 'expo-haptics';
 import * as Crypto from 'expo-crypto';
 import { C } from '@/constants/colors';
 import { useAuth } from '@/context/AuthContext';
+import { useFeedbackToast } from '@/context/FeedbackToastContext';
 import { mealsRepo, targetsRepo } from '@/lib/storage';
 import { todayYMD, addDays, formatDateLong, toYMD, getMondayYMD } from "@/lib/dates";
-import type { ISODate } from "@/lib/models";
 import type { MealEntry, WeeklyTarget } from '@/lib/types';
 
 const EMPTY_FORM = {
@@ -52,6 +52,7 @@ const mbStyles = StyleSheet.create({
 export default function NutritionScreen() {
   const insets = useSafeAreaInsets();
   const { user } = useAuth();
+  const { showToast, showUndoToast } = useFeedbackToast();
 
   const [selectedDate, setSelectedDate] = useState(todayYMD());
   const [meals, setMeals] = useState<MealEntry[]>([]);
@@ -98,30 +99,64 @@ export default function NutritionScreen() {
 
   const saveMeal = async () => {
     if (!user || !form.mealName.trim()) return;
-    const now = new Date().toISOString();
-    const meal: MealEntry = {
-      id: editingMeal?.id || Crypto.randomUUID(),
-      date: selectedDate,
-      mealName: form.mealName.trim(),
-      notes: form.notes.trim() || null,
-      calories: parseFloat(form.calories) || null,
-      proteinG: parseFloat(form.proteinG) || null,
-      carbsG: parseFloat(form.carbsG) || null,
-      fatG: parseFloat(form.fatG) || null,
-      createdAt: editingMeal?.createdAt || now,
-      updatedAt: now,
-    };
-    await mealsRepo.save(user.id, meal);
-    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
-    setShowModal(false);
-    load();
+    try {
+      const now = new Date().toISOString();
+      const meal: MealEntry = {
+        id: editingMeal?.id || Crypto.randomUUID(),
+        date: selectedDate,
+        mealName: form.mealName.trim(),
+        notes: form.notes.trim() || null,
+        calories: parseFloat(form.calories) || null,
+        proteinG: parseFloat(form.proteinG) || null,
+        carbsG: parseFloat(form.carbsG) || null,
+        fatG: parseFloat(form.fatG) || null,
+        createdAt: editingMeal?.createdAt || now,
+        updatedAt: now,
+      };
+      await mealsRepo.save(user.id, meal);
+      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+      setShowModal(false);
+      await load();
+      showToast({ message: 'Meal saved', tone: 'success' });
+    } catch (error) {
+      showToast({ message: 'Unable to save meal. Please try again.', tone: 'error' });
+      console.warn('save meal failed', error);
+    }
   };
 
   const deleteMeal = async (id: string) => {
     if (!user) return;
-    await mealsRepo.delete(user.id, id);
+    const deletedMeal = meals.find((meal) => meal.id === id);
+    if (!deletedMeal) return;
+
+    const deletedIndex = meals.findIndex((meal) => meal.id === id);
+    const restoreMeal = () => {
+      setMeals((prev) => {
+        if (prev.some((meal) => meal.id === deletedMeal.id)) return prev;
+        const next = [...prev];
+        next.splice(Math.min(Math.max(deletedIndex, 0), next.length), 0, deletedMeal);
+        return next;
+      });
+    };
+
+    setMeals((prev) => prev.filter((meal) => meal.id !== id));
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
-    load();
+
+    showUndoToast({
+      message: `${deletedMeal.mealName} deleted`,
+      durationMs: 10000,
+      onUndo: restoreMeal,
+      onCommit: async () => {
+        try {
+          await mealsRepo.delete(user.id, id);
+          await load();
+        } catch (error) {
+          restoreMeal();
+          throw error;
+        }
+      },
+      onCommitErrorMessage: 'Unable to delete meal. Please try again.',
+    });
   };
 
   const totalCalories = meals.reduce((s, m) => s + (m.calories || 0), 0);

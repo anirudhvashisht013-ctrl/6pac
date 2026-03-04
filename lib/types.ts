@@ -69,9 +69,27 @@ export interface GymSet {
   completed: boolean;
 }
 
+export type ExerciseMovementType = 'compound' | 'isolation';
+
+export interface ExerciseLibraryItem {
+  id: string;
+  name: string;
+  normalizedName: string;
+  coachingCues: string;
+  referenceVideoUrls: string[];
+  movementType: ExerciseMovementType;
+  primaryMuscleGroup: string;
+  targetMuscles: string[];
+  equipment: string | null;
+  alternativeExerciseIds: string[];
+  createdAt: string;
+  updatedAt: string;
+}
+
 export interface WorkoutBlock {
   id: string;
   type: 'gym' | 'cardio' | 'rest';
+  exerciseId?: string | null;
   exerciseName?: string;
   sets?: number;
   repsOption?: string;
@@ -94,6 +112,7 @@ export interface WorkoutTemplate {
 export interface BlockPerformance {
   blockId: string;
   completed: boolean;
+  exerciseIdOverride?: string | null;
   sets?: GymSet[];
   minutesCompleted?: number;
 }

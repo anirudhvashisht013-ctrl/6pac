@@ -7,6 +7,7 @@ import {
 import type {
   BodyMeasurementEntry,
   DailyLog,
+  ExerciseLibraryItem,
   MealEntry,
   WeekSchedule,
   WeeklyTarget,
@@ -70,6 +71,14 @@ export const cloudMirrorRepo = {
 
   async deleteTemplate(uid: string, templateId: string): Promise<void> {
     await removeWithTombstoneQueue(uid, "templates_v1", templateId);
+  },
+
+  async upsertExercise(uid: string, exercise: ExerciseLibraryItem): Promise<void> {
+    await upsertWithQueue(uid, "exercises_v1", exercise.id, exercise);
+  },
+
+  async deleteExercise(uid: string, exerciseId: string): Promise<void> {
+    await removeWithTombstoneQueue(uid, "exercises_v1", exerciseId);
   },
 
   async upsertMeal(uid: string, meal: MealEntry): Promise<void> {

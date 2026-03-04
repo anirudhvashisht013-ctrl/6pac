@@ -8,7 +8,7 @@ import {
   Pressable,
   TextInput,
   ActivityIndicator,
-  Alert,
+  Modal,
   LayoutAnimation,
   Platform,
   UIManager,
@@ -19,8 +19,15 @@ import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
 import * as Haptics from 'expo-haptics';
 import { C } from '@/constants/colors';
 import { useAuth } from '@/context/AuthContext';
-import { sessionsRepo, workoutsRepo } from '@/lib/storage';
-import type { WorkoutSession, WorkoutTemplate, GymSet } from '@/lib/types';
+import { MAX_REFERENCE_VIDEO_URLS } from '@/lib/exercises/constants';
+import { exercisesRepo, sessionsRepo, workoutsRepo } from '@/lib/storage';
+import type { ExerciseLibraryItem, WorkoutSession, WorkoutTemplate, GymSet } from '@/lib/types';
+import {
+  fetchWorkoutQuotesFromInternet,
+  getFallbackWorkoutQuotes,
+  pickRandomWorkoutQuote,
+  type WorkoutQuote,
+} from '@/lib/workouts/quotes';
 
 import ReferenceVideosSection from '@/components/ReferenceVideosSection';
 import { fetchYouTubeMeta, type ReferenceVideoMeta } from '@/lib/youtube';
@@ -36,6 +43,7 @@ export default function PlayerScreen() {
 
   const [session, setSession] = useState<WorkoutSession | null>(null);
   const [template, setTemplate] = useState<WorkoutTemplate | null>(null);
+  const [exercisesById, setExercisesById] = useState<Map<string, ExerciseLibraryItem>>(new Map());
 
   const [currentBlockIdx, setCurrentBlockIdx] = useState(0);
 
@@ -47,6 +55,14 @@ export default function PlayerScreen() {
 
   const [activeVideoUrl, setActiveVideoUrl] = useState<string | null>(null);
   const [videoMetaMap, setVideoMetaMap] = useState<Record<string, ReferenceVideoMeta | undefined>>({});
+  const [showSwitchModal, setShowSwitchModal] = useState(false);
+  const [completionQuote, setCompletionQuote] = useState<WorkoutQuote>(() =>
+    pickRandomWorkoutQuote(getFallbackWorkoutQuotes())
+  );
+
+  const navigateToWorkouts = useCallback(() => {
+    router.replace('/(tabs)/workouts');
+  }, []);
 
   // Load session + template
   useEffect(() => {
@@ -55,7 +71,7 @@ export default function PlayerScreen() {
 
       const s = await sessionsRepo.getById(user.id, sessionId);
       if (!s) {
-        router.back();
+        navigateToWorkouts();
         return;
       }
       if (s.completed) setFinished(true);
@@ -64,26 +80,29 @@ export default function PlayerScreen() {
       const t = await workoutsRepo.getById(user.id, s.workoutTemplateId);
       setTemplate(t);
 
+      const exercises = await exercisesRepo.getAll(user.id);
+      setExercisesById(new Map(exercises.map((exercise) => [exercise.id, exercise])));
+
       setLoading(false);
     })();
-  }, [user, sessionId]);
+  }, [user, sessionId, navigateToWorkouts]);
 
-  const saveSession = async (updates: Partial<WorkoutSession>) => {
+  const saveSession = useCallback(async (updates: Partial<WorkoutSession>) => {
     if (!user || !session) return;
     const updated = { ...session, ...updates };
     await sessionsRepo.save(user.id, updated);
     setSession(updated);
     return updated;
-  };
+  }, [user, session]);
 
-  const updateBlockPerformance = async (
+  const updateBlockPerformance = useCallback(async (
     blockId: string,
-    perf: Partial<{ completed: boolean; sets: GymSet[]; minutesCompleted: number }>
+    perf: Partial<{ completed: boolean; exerciseIdOverride: string | null; sets: GymSet[]; minutesCompleted: number }>
   ) => {
     if (!session) return;
     const newPerfs = session.blockPerformances.map(p => (p.blockId === blockId ? { ...p, ...perf } : p));
     await saveSession({ blockPerformances: newPerfs });
-  };
+  }, [session, saveSession]);
 
   const updateSet = async (blockId: string, setIdx: number, updates: Partial<GymSet>) => {
     if (!session) return;
@@ -92,6 +111,30 @@ export default function PlayerScreen() {
 
     const newSets = perf.sets.map((s, i) => (i === setIdx ? { ...s, ...updates } : s));
     await updateBlockPerformance(blockId, { sets: newSets });
+  };
+
+  const addSet = async (blockId: string) => {
+    if (!session) return;
+    const perf = session.blockPerformances.find(p => p.blockId === blockId);
+    const current = perf?.sets || [];
+    await updateBlockPerformance(blockId, {
+      sets: [...current, { weight: null, reps: null, completed: false }],
+    });
+  };
+
+  const removeSet = async (blockId: string, setIdx: number) => {
+    if (!session) return;
+    const perf = session.blockPerformances.find(p => p.blockId === blockId);
+    const current = perf?.sets || [];
+    if (current.length <= 1) {
+      await updateBlockPerformance(blockId, {
+        sets: [{ weight: null, reps: null, completed: false }],
+      });
+      return;
+    }
+    await updateBlockPerformance(blockId, {
+      sets: current.filter((_, idx) => idx !== setIdx),
+    });
   };
 
   const endWorkout = async () => {
@@ -178,7 +221,7 @@ export default function PlayerScreen() {
 
   const ensureMetaLoaded = useCallback(
     async (urls: string[]) => {
-      const unique = Array.from(new Set(urls.filter(Boolean))).slice(0, 3);
+      const unique = Array.from(new Set(urls.filter(Boolean))).slice(0, MAX_REFERENCE_VIDEO_URLS);
       const missing = unique.filter(u => !videoMetaMap[u]);
 
       if (missing.length === 0) return;
@@ -195,6 +238,46 @@ export default function PlayerScreen() {
     [videoMetaMap]
   );
 
+  const getPerformanceForBlock = useCallback(
+    (blockId: string) => session?.blockPerformances.find((p) => p.blockId === blockId) || null,
+    [session]
+  );
+
+  const getActiveExerciseIdForBlock = useCallback(
+    (block: WorkoutTemplate['blocks'][number] | undefined) => {
+      if (!block || block.type !== 'gym') return null;
+      const perf = getPerformanceForBlock(block.id);
+      return perf?.exerciseIdOverride || block.exerciseId || null;
+    },
+    [getPerformanceForBlock]
+  );
+
+  const getLibraryExerciseForBlock = useCallback(
+    (block: WorkoutTemplate['blocks'][number] | undefined) => {
+      const activeId = getActiveExerciseIdForBlock(block);
+      if (!activeId) return null;
+      return exercisesById.get(activeId) || null;
+    },
+    [exercisesById, getActiveExerciseIdForBlock]
+  );
+
+  const getGymBlockName = useCallback(
+    (block: WorkoutTemplate['blocks'][number] | undefined) => {
+      if (!block || block.type !== 'gym') return '';
+      const fromLibrary = getLibraryExerciseForBlock(block)?.name;
+      return fromLibrary || block.exerciseName || 'Exercise';
+    },
+    [getLibraryExerciseForBlock]
+  );
+
+  const switchExerciseForBlock = async (blockId: string, nextExerciseId: string | null, baseExerciseId?: string | null) => {
+    const nextOverride =
+      nextExerciseId && baseExerciseId && nextExerciseId !== baseExerciseId
+        ? nextExerciseId
+        : null;
+    await updateBlockPerformance(blockId, { exerciseIdOverride: nextOverride });
+  };
+
   /**
    * IMPORTANT FIX:
    * These derived values + this effect MUST live ABOVE any early returns.
@@ -203,12 +286,20 @@ export default function PlayerScreen() {
   const derived = useMemo(() => {
     const b = template?.blocks?.[currentBlockIdx];
     const nb = template?.blocks?.[currentBlockIdx + 1];
+    const currentExercise = getLibraryExerciseForBlock(b);
+    const nextExercise = getLibraryExerciseForBlock(nb);
 
-    const currentExerciseUrls = b?.type === 'gym' ? (b.referenceVideoUrls || []).slice(0, 3) : [];
-    const nextExerciseUrls = nb?.type === 'gym' ? (nb.referenceVideoUrls || []).slice(0, 3) : [];
+    const currentExerciseUrls =
+      b?.type === 'gym'
+        ? ((currentExercise?.referenceVideoUrls?.length ? currentExercise.referenceVideoUrls : b.referenceVideoUrls) || []).slice(0, MAX_REFERENCE_VIDEO_URLS)
+        : [];
+    const nextExerciseUrls =
+      nb?.type === 'gym'
+        ? ((nextExercise?.referenceVideoUrls?.length ? nextExercise.referenceVideoUrls : nb.referenceVideoUrls) || []).slice(0, MAX_REFERENCE_VIDEO_URLS)
+        : [];
 
     return { block: b, nextBlock: nb, currentExerciseUrls, nextExerciseUrls };
-  }, [template, currentBlockIdx]);
+  }, [template, currentBlockIdx, getLibraryExerciseForBlock]);
 
   useEffect(() => {
     if (!template) return;
@@ -222,6 +313,32 @@ export default function PlayerScreen() {
     derived.nextExerciseUrls,
     ensureMetaLoaded,
   ]);
+
+  useEffect(() => {
+    if (!session || !derived.block || derived.block.type !== 'gym') return;
+    const perf = session.blockPerformances.find((p) => p.blockId === derived.block?.id);
+    if (perf?.sets && perf.sets.length > 0) return;
+    void updateBlockPerformance(derived.block.id, {
+      sets: [{ weight: null, reps: null, completed: false }],
+    });
+  }, [session, derived.block, updateBlockPerformance]);
+
+  useEffect(() => {
+    if (!finished) return;
+
+    const seed = session?.id || `${Date.now()}`;
+    setCompletionQuote(pickRandomWorkoutQuote(getFallbackWorkoutQuotes(), seed));
+
+    let active = true;
+    void fetchWorkoutQuotesFromInternet().then((remoteQuotes) => {
+      if (!active) return;
+      setCompletionQuote(pickRandomWorkoutQuote(remoteQuotes, seed));
+    });
+
+    return () => {
+      active = false;
+    };
+  }, [finished, session?.id]);
 
   // --------- Early returns AFTER all hooks ----------
   if (loading) {
@@ -248,7 +365,13 @@ export default function PlayerScreen() {
           </Text>
         )}
 
-        <Pressable style={styles.doneBtn} onPress={() => router.back()}>
+        <View style={styles.quoteCard}>
+          <Text style={styles.quoteText}>&ldquo;{completionQuote.quote}&rdquo;</Text>
+          <Text style={styles.quoteAuthor}>- {completionQuote.author}</Text>
+          <Text style={styles.quoteAttribution}>Quotes via ZenQuotes API · zenquotes.io</Text>
+        </View>
+
+        <Pressable style={styles.doneBtn} onPress={navigateToWorkouts}>
           <Text style={styles.doneBtnText}>Done</Text>
         </Pressable>
       </View>
@@ -259,19 +382,35 @@ export default function PlayerScreen() {
 
   const block = derived.block!;
   const nextBlock = derived.nextBlock;
-  const perf = session.blockPerformances.find(p => p.blockId === block.id);
+  const isLastBlock = currentBlockIdx === template.blocks.length - 1;
+  const perf = getPerformanceForBlock(block.id);
   const progress = `${currentBlockIdx + 1} / ${template.blocks.length}`;
+  const baseExercise = block.type === 'gym' && block.exerciseId ? exercisesById.get(block.exerciseId) || null : null;
+  const activeExercise = block.type === 'gym' ? getLibraryExerciseForBlock(block) : null;
+  const switchCandidateIds =
+    block.type === 'gym'
+      ? Array.from(
+          new Set([
+            block.exerciseId || '',
+            getActiveExerciseIdForBlock(block) || '',
+            ...(baseExercise?.alternativeExerciseIds || []),
+            ...(activeExercise?.alternativeExerciseIds || []),
+          ].filter(Boolean))
+        )
+      : [];
+  const switchOptions =
+    block.type === 'gym'
+      ? switchCandidateIds
+          .map((id) => exercisesById.get(id))
+          .filter((exercise): exercise is ExerciseLibraryItem => !!exercise)
+          .sort((a, b) => a.name.localeCompare(b.name))
+      : [];
 
   return (
     <View style={{ flex: 1, backgroundColor: C.bg }}>
       <View style={[styles.header, { paddingTop: insets.top + 12 }]}>
         <Pressable
-          onPress={() => {
-            Alert.alert('End Workout?', 'Your progress will be saved.', [
-              { text: 'Continue', style: 'cancel' },
-              { text: 'End', style: 'destructive', onPress: endWorkout },
-            ]);
-          }}
+          onPress={navigateToWorkouts}
           style={styles.closeBtn}
         >
           <Ionicons name="close" size={22} color={C.textSecondary} />
@@ -302,9 +441,11 @@ export default function PlayerScreen() {
             <Text style={styles.restLabel}>{block.label || 'Rest'}</Text>
             <Text style={styles.restTimer}>{restTimeLeft}s</Text>
 
-            <Pressable style={styles.skipBtn} onPress={skipRest}>
-              <Text style={styles.skipBtnText}>Skip</Text>
-            </Pressable>
+            {!isLastBlock && (
+              <Pressable style={styles.skipBtn} onPress={skipRest}>
+                <Text style={styles.skipBtnText}>Next Exercise</Text>
+              </Pressable>
+            )}
           </View>
         ) : block.type === 'cardio' ? (
           <View style={styles.cardioBlock}>
@@ -331,7 +472,9 @@ export default function PlayerScreen() {
 
             <Pressable style={({ pressed }) => [styles.completeBtn, pressed && { opacity: 0.85 }]} onPress={completeBlock}>
               <Ionicons name="checkmark" size={20} color={C.bg} />
-              <Text style={styles.completeBtnText}>Complete Cardio</Text>
+              <Text style={styles.completeBtnText}>
+                {isLastBlock ? 'Complete Cardio and End Workout' : 'Complete Cardio'}
+              </Text>
             </Pressable>
           </View>
         ) : (
@@ -341,10 +484,18 @@ export default function PlayerScreen() {
               <Text style={styles.blockTypeText}>Exercise</Text>
             </View>
 
-            <Text style={styles.blockName}>{block.exerciseName}</Text>
-            <Text style={styles.blockMeta}>
-              {block.sets} sets · {block.repsOption} reps
-            </Text>
+            <View style={styles.blockNameRow}>
+              <Text style={styles.blockName}>{getGymBlockName(block)}</Text>
+              {switchOptions.length > 1 && (
+                <Pressable
+                  style={({ pressed }) => [styles.switchBtn, pressed && { opacity: 0.85 }]}
+                  onPress={() => setShowSwitchModal(true)}
+                >
+                  <Ionicons name="swap-horizontal" size={16} color={C.primary} />
+                </Pressable>
+              )}
+            </View>
+            <Text style={styles.blockMeta}>{(perf?.sets?.length || 0)} sets logged</Text>
 
             {block.notes ? <Text style={styles.blockNotes}>{block.notes}</Text> : null}
 
@@ -353,6 +504,7 @@ export default function PlayerScreen() {
               <Text style={[styles.setColHead, { flex: 1 }]}>Weight (kg)</Text>
               <Text style={[styles.setColHead, { flex: 1 }]}>Reps</Text>
               <Text style={[styles.setColHead, { flex: 0.4 }]}>Done</Text>
+              <Text style={[styles.setColHead, { width: 34 }]}> </Text>
             </View>
 
             {perf?.sets?.map((set, setIdx) => (
@@ -372,7 +524,7 @@ export default function PlayerScreen() {
                   style={[styles.setInput, { flex: 1 }]}
                   value={set.reps != null ? String(set.reps) : ''}
                   onChangeText={v => updateSet(block.id, setIdx, { reps: parseInt(v) || null })}
-                  placeholder={block.repsOption === 'Until Failure' ? 'fail' : block.repsOption || '—'}
+                  placeholder="reps"
                   placeholderTextColor={C.textMuted}
                   keyboardType="numeric"
                 />
@@ -390,12 +542,32 @@ export default function PlayerScreen() {
                     color={set.completed ? C.success : C.border}
                   />
                 </Pressable>
+
+                <Pressable
+                  style={styles.removeSetBtn}
+                  onPress={() => {
+                    removeSet(block.id, setIdx);
+                    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                  }}
+                >
+                  <Ionicons name="trash-outline" size={16} color={C.error} />
+                </Pressable>
               </View>
             ))}
 
+            <Pressable
+              style={({ pressed }) => [styles.addSetBtn, pressed && { opacity: 0.85 }]}
+              onPress={() => addSet(block.id)}
+            >
+              <Ionicons name="add" size={16} color={C.primary} />
+              <Text style={styles.addSetText}>Add Set</Text>
+            </Pressable>
+
             <Pressable style={({ pressed }) => [styles.completeBtn, pressed && { opacity: 0.85 }]} onPress={completeBlock}>
               <Ionicons name="checkmark" size={20} color={C.bg} />
-              <Text style={styles.completeBtnText}>Complete Exercise</Text>
+              <Text style={styles.completeBtnText}>
+                {isLastBlock ? 'Complete Exercise and End Workout' : 'Complete Exercise'}
+              </Text>
             </Pressable>
 
             {/* Exercise videos BELOW the button (your requested UX) */}
@@ -418,7 +590,7 @@ export default function PlayerScreen() {
                 <>
                   <MaterialCommunityIcons name="dumbbell" size={16} color={C.textMuted} />
                   <Text style={styles.nextCardText}>
-                    {nextBlock.exerciseName} · {nextBlock.sets}×{nextBlock.repsOption}
+                    {getGymBlockName(nextBlock)}
                   </Text>
                 </>
               ) : nextBlock.type === 'cardio' ? (
@@ -453,7 +625,46 @@ export default function PlayerScreen() {
         )}
       </ScrollView>
 
-      {block.type !== 'rest' && (
+      <Modal visible={showSwitchModal} transparent animationType="fade" onRequestClose={() => setShowSwitchModal(false)}>
+        <Pressable style={styles.switchModalOverlay} onPress={() => setShowSwitchModal(false)}>
+          <View style={styles.switchModalCard}>
+            <Text style={styles.switchModalTitle}>Switch Exercise</Text>
+            {switchOptions.map((option) => {
+              const isActive = option.id === getActiveExerciseIdForBlock(block);
+              return (
+                <Pressable
+                  key={option.id}
+                  style={[styles.switchOptionRow, isActive && styles.switchOptionRowActive]}
+                  onPress={async () => {
+                    await switchExerciseForBlock(block.id, option.id, block.exerciseId);
+                    setShowSwitchModal(false);
+                  }}
+                >
+                  <View style={{ flex: 1 }}>
+                    <Text style={styles.switchOptionName}>{option.name}</Text>
+                    <Text style={styles.switchOptionMeta}>
+                      {option.movementType} • {option.primaryMuscleGroup}
+                    </Text>
+                  </View>
+                  <Ionicons
+                    name={isActive ? 'checkmark-circle' : 'chevron-forward'}
+                    size={18}
+                    color={isActive ? C.primary : C.textMuted}
+                  />
+                </Pressable>
+              );
+            })}
+            <Pressable
+              style={styles.switchCancelBtn}
+              onPress={() => setShowSwitchModal(false)}
+            >
+              <Text style={styles.switchCancelText}>Cancel</Text>
+            </Pressable>
+          </View>
+        </Pressable>
+      </Modal>
+
+      {(block.type !== 'rest' || isLastBlock) && (
         <View style={[styles.bottomBar, { paddingBottom: insets.bottom + 16 }]}>
           <Pressable style={({ pressed }) => [styles.endBtn, pressed && { opacity: 0.8 }]} onPress={endWorkout}>
             <Ionicons name="flag-outline" size={18} color={C.error} />
@@ -531,7 +742,18 @@ const styles = StyleSheet.create({
   },
   blockTypeText: { fontFamily: 'Outfit_500Medium', fontSize: 12, color: C.primary },
 
+  blockNameRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 12 },
   blockName: { fontFamily: 'Outfit_700Bold', fontSize: 26, color: C.text },
+  switchBtn: {
+    width: 34,
+    height: 34,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: C.primary + '55',
+    backgroundColor: C.primaryBg,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
   blockMeta: { fontFamily: 'Outfit_500Medium', fontSize: 15, color: C.textMuted },
   blockNotes: {
     fontFamily: 'Outfit_400Regular',
@@ -576,6 +798,29 @@ const styles = StyleSheet.create({
   },
   setCheck: { alignItems: 'center', justifyContent: 'center' },
   setCheckDone: {},
+  removeSetBtn: {
+    width: 34,
+    height: 34,
+    borderRadius: 8,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: C.errorBg,
+    borderWidth: 1,
+    borderColor: C.error + '44',
+  },
+  addSetBtn: {
+    marginTop: 4,
+    height: 42,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: C.primary + '55',
+    backgroundColor: C.primaryBg,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+  },
+  addSetText: { fontFamily: 'Outfit_600SemiBold', fontSize: 14, color: C.primary },
 
   completeBtn: {
     flexDirection: 'row',
@@ -661,6 +906,36 @@ const styles = StyleSheet.create({
   finishedTitle: { fontFamily: 'Outfit_700Bold', fontSize: 30, color: C.text },
   finishedSubtitle: { fontFamily: 'Outfit_500Medium', fontSize: 17, color: C.textSecondary },
   finishedDuration: { fontFamily: 'Outfit_400Regular', fontSize: 15, color: C.textMuted },
+  quoteCard: {
+    width: '100%',
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: C.border,
+    backgroundColor: C.surface2,
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+    gap: 6,
+  },
+  quoteText: {
+    fontFamily: 'Outfit_400Regular',
+    fontSize: 13,
+    color: C.textSecondary,
+    fontStyle: 'italic',
+    lineHeight: 19,
+    textAlign: 'center',
+  },
+  quoteAuthor: {
+    fontFamily: 'Outfit_500Medium',
+    fontSize: 12,
+    color: C.textMuted,
+    textAlign: 'right',
+  },
+  quoteAttribution: {
+    fontFamily: 'Outfit_400Regular',
+    fontSize: 10,
+    color: C.textMuted,
+    textAlign: 'center',
+  },
 
   doneBtn: {
     width: '100%',
@@ -672,4 +947,48 @@ const styles = StyleSheet.create({
     marginTop: 16,
   },
   doneBtnText: { fontFamily: 'Outfit_600SemiBold', fontSize: 16, color: C.bg },
+
+  switchModalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.7)',
+    justifyContent: 'flex-end',
+  },
+  switchModalCard: {
+    backgroundColor: C.surface,
+    borderTopLeftRadius: 18,
+    borderTopRightRadius: 18,
+    padding: 16,
+    gap: 8,
+    maxHeight: '72%',
+  },
+  switchModalTitle: { fontFamily: 'Outfit_700Bold', fontSize: 18, color: C.text, marginBottom: 6 },
+  switchOptionRow: {
+    minHeight: 54,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: C.border,
+    backgroundColor: C.surface2,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+  },
+  switchOptionRowActive: {
+    borderColor: C.primary + '66',
+    backgroundColor: C.primaryBg,
+  },
+  switchOptionName: { fontFamily: 'Outfit_600SemiBold', fontSize: 14, color: C.text },
+  switchOptionMeta: { fontFamily: 'Outfit_400Regular', fontSize: 12, color: C.textMuted, textTransform: 'capitalize' },
+  switchCancelBtn: {
+    marginTop: 6,
+    minHeight: 44,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: C.border,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: C.surface2,
+  },
+  switchCancelText: { fontFamily: 'Outfit_600SemiBold', fontSize: 14, color: C.textSecondary },
 });

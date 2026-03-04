@@ -1,5 +1,5 @@
 // app/measurements.tsx
-import React, { useMemo, useState } from "react";
+import React, { useCallback, useMemo, useState } from "react";
 import {
   View,
   Text,
@@ -9,32 +9,24 @@ import {
   TextInput,
   ActivityIndicator,
   Alert,
-  Platform,
 } from "react-native";
-import { router, useLocalSearchParams } from "expo-router";
+import { router, useFocusEffect, useLocalSearchParams } from "expo-router";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
 import * as Haptics from "expo-haptics";
 import { C } from "@/constants/colors";
 import { S } from "@/constants/spacing";
 import { useAuth } from "@/context/AuthContext";
+import { useFeedbackToast } from "@/context/FeedbackToastContext";
+import {
+  buildMeasurementEntryFromForm,
+  hydrateMeasurementForm,
+  resolveMeasurementDate,
+  type MeasurementFormValues,
+} from "@/lib/measurements/formMapping";
 import { canLogMeasurementDay } from "@/lib/measurements/slots";
 import { measurementsRepo } from "@/lib/storage";
-import type { BodyMeasurementEntry, ISODate } from "@/lib/models";
-
-const CM_PER_IN = 2.54;
-const toCm = (inch: number) => inch * CM_PER_IN;
-const parseNumberInput = (raw: string): number | null => {
-  const cleaned = raw
-    .trim()
-    .replace(/,/g, ".")         // 34,5 -> 34.5
-    .replace(/[^0-9.]/g, "");   // removes "in", spaces, etc.
-
-  if (!cleaned) return null;
-
-  const n = parseFloat(cleaned);
-  return Number.isFinite(n) ? n : null;
-};
+import { todayYMD } from "@/lib/dates";
 
 const MEASUREMENT_FIELDS = [
   { key: "waist", label: "Waist" },
@@ -48,41 +40,40 @@ const MEASUREMENT_FIELDS = [
   { key: "bicepsL", label: "Biceps (Left)" },
 ] as const;
 
-type FormValues = Record<string, string>;
-
-function isISODate(v: string): v is ISODate {
-  return /^\d{4}-\d{2}-\d{2}$/.test(v);
-}
-
 export default function MeasurementsScreen() {
   const insets = useSafeAreaInsets();
   const { user } = useAuth();
+  const { showToast } = useFeedbackToast();
   const params = useLocalSearchParams<{ scheduledYMD?: string }>();
 
   const scheduledYMD = useMemo(() => {
-    const raw = (params.scheduledYMD || "").trim();
-    if (!raw) return null;
-    if (!isISODate(raw)) return null;
-    return raw as ISODate;
+    return resolveMeasurementDate(params.scheduledYMD, todayYMD());
   }, [params.scheduledYMD]);
 
   const [saving, setSaving] = useState(false);
-  const [form, setForm] = useState<FormValues>({});
+  const [form, setForm] = useState<MeasurementFormValues>(() => hydrateMeasurementForm(null).form);
   const [bodyFat, setBodyFat] = useState("");
   const [notes, setNotes] = useState("");
 
-  const title = scheduledYMD ? `Log for ${scheduledYMD}` : "Log Measurements";
+  const title = `Log for ${scheduledYMD}`;
+
+  const hydrateExisting = useCallback(async () => {
+    if (!user) return;
+    const existing = await measurementsRepo.getByDate(user.id, scheduledYMD);
+    const hydrated = hydrateMeasurementForm(existing);
+    setForm(hydrated.form);
+    setBodyFat(hydrated.bodyFat);
+    setNotes(hydrated.notes);
+  }, [user, scheduledYMD]);
+
+  useFocusEffect(
+    useCallback(() => {
+      void hydrateExisting();
+    }, [hydrateExisting])
+  );
 
   const save = async () => {
     if (!user) return;
-
-    if (!scheduledYMD) {
-      Alert.alert(
-        "Missing date",
-        "Open this screen from Body Measurements so a 15-day slot date is selected."
-      );
-      return;
-    }
 
     // Prevent future-date logging (your rule: can't add beforehand)
     if (!canLogMeasurementDay(scheduledYMD)) {
@@ -93,71 +84,21 @@ export default function MeasurementsScreen() {
     setSaving(true);
 
     try {
-      const entry: BodyMeasurementEntry = {
-        schemaVersion: 1,
+      const entry = buildMeasurementEntryFromForm({
         date: scheduledYMD,
-
-        waist: (() => {
-          const v = parseNumberInput(form.waist || "");
-          return v == null ? null : toCm(v);
-        })(),
-
-        chest: (() => {
-          const v = parseNumberInput(form.chest || "");
-          return v == null ? null : toCm(v);
-        })(),
-
-        shoulders: (() => {
-          const v = parseNumberInput(form.shoulders || "");
-          return v == null ? null : toCm(v);
-        })(),
-
-        armsR: (() => {
-          const v = parseNumberInput(form.armsR || "");
-          return v == null ? null : toCm(v);
-        })(),
-
-        armsL: (() => {
-          const v = parseNumberInput(form.armsL || "");
-          return v == null ? null : toCm(v);
-        })(),
-
-        thighR: (() => {
-          const v = parseNumberInput(form.thighR || "");
-          return v == null ? null : toCm(v);
-        })(),
-
-        thighL: (() => {
-          const v = parseNumberInput(form.thighL || "");
-          return v == null ? null : toCm(v);
-        })(),
-
-        bicepsR: (() => {
-          const v = parseNumberInput(form.bicepsR || "");
-          return v == null ? null : toCm(v);
-        })(),
-
-        bicepsL: (() => {
-          const v = parseNumberInput(form.bicepsL || "");
-          return v == null ? null : toCm(v);
-        })(),
-
-        bodyFatPercent: (() => {
-          const v = parseNumberInput(bodyFat);
-          return v == null ? null : v;
-        })(),
-
-        notes: notes.trim() || null,
+        form,
+        bodyFat,
+        notes,
         loggedAt: new Date().toISOString(),
-      };
+      });
 
       await measurementsRepo.save(user.id, entry);
 
       await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+      showToast({ message: "Measurements saved", tone: "success" });
       router.back();
     } catch {
-      if (Platform.OS === "web") window.alert("Save failed. Please try again.");
-      else Alert.alert("Save failed", "Please try again.");
+      showToast({ message: "Unable to save measurements. Please try again.", tone: "error" });
     } finally {
       setSaving(false);
     }
@@ -190,8 +131,13 @@ export default function MeasurementsScreen() {
               <View style={styles.formInputRow}>
                 <TextInput
                   style={styles.formInput}
-                  value={form[key] || ""}
-                  onChangeText={(v) => setForm((f) => ({ ...f, [key]: v }))}
+                  value={form[key as keyof MeasurementFormValues] || ""}
+                  onChangeText={(v) =>
+                    setForm((f) => ({
+                      ...f,
+                      [key]: v,
+                    }))
+                  }
                   placeholder="—"
                   placeholderTextColor={C.textMuted}
                   keyboardType="decimal-pad"

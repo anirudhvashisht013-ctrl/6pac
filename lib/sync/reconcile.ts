@@ -9,6 +9,7 @@ import { measurementDocId, normalizeMeasurementEntry } from "@/lib/measurements/
 import type {
   BodyMeasurementEntry,
   DailyLog,
+  ExerciseLibraryItem,
   MealEntry,
   WeekSchedule,
   WeeklyTarget,
@@ -32,6 +33,7 @@ type MirrorCollectionName =
   | "targets_v1"
   | "schedules_v1"
   | "templates_v1"
+  | "exercises_v1"
   | "sessions_v1"
   | "measurements_local_v1"
   | "tombstones_v1";
@@ -241,6 +243,7 @@ export async function reconcileCloudToLocal(
     targetsRes,
     schedulesRes,
     templatesRes,
+    exercisesRes,
     sessionsRes,
     measurementsRes,
     tombstonesRes,
@@ -250,6 +253,7 @@ export async function reconcileCloudToLocal(
     fetchMirrorCollection<WeeklyTarget>(uid, "targets_v1", force ? undefined : cursors.targets_v1),
     fetchMirrorCollection<WeekSchedule>(uid, "schedules_v1", force ? undefined : cursors.schedules_v1),
     fetchMirrorCollection<WorkoutTemplate>(uid, "templates_v1", force ? undefined : cursors.templates_v1),
+    fetchMirrorCollection<ExerciseLibraryItem>(uid, "exercises_v1", force ? undefined : cursors.exercises_v1),
     fetchMirrorCollection<WorkoutSession>(uid, "sessions_v1", force ? undefined : cursors.sessions_v1),
     fetchMirrorCollection<BodyMeasurementEntry>(uid, "measurements_local_v1", force ? undefined : cursors.measurements_local_v1),
     fetchTombstones(uid, force ? undefined : cursors.tombstones_v1),
@@ -259,6 +263,7 @@ export async function reconcileCloudToLocal(
   const cloudTargets = targetsRes.items;
   const cloudSchedules = schedulesRes.items;
   const cloudTemplates = templatesRes.items;
+  const cloudExercises = exercisesRes.items;
   const cloudSessions = sessionsRes.items;
   const cloudMeasurements = measurementsRes.items
     .map(normalizeMeasurementEntry)
@@ -284,6 +289,7 @@ export async function reconcileCloudToLocal(
     targets: mergeByKey(local.targets as any[], cloudTargets as any[], (x) => String(x.weekStartDate), ["updatedAt", "createdAt"]),
     schedules: mergeByKey(local.schedules as any[], cloudSchedules as any[], (x) => String(x.weekStartDate), []),
     templates: mergeByKey(local.templates as any[], cloudTemplates as any[], (x) => String(x.id), ["updatedAt", "createdAt"]),
+    exercises: mergeByKey(local.exercises as any[], cloudExercises as any[], (x) => String(x.id), ["updatedAt", "createdAt"]),
     sessions: mergeByKey(local.sessions as any[], cloudSessions as any[], (x) => String(x.id), ["endedAt", "startedAt"]),
     measurements: mergeByKey(localMeasurements, cloudMeasurements, measurementKey, ["updatedAt", "createdAt", "loggedAt"]),
   };
@@ -294,6 +300,7 @@ export async function reconcileCloudToLocal(
     targets: applyTombstones("targets_v1", mergedBeforeDelete.targets, (x) => String((x as any).weekStartDate), tombstonesByKey, ["updatedAt", "createdAt"]),
     schedules: applyTombstones("schedules_v1", mergedBeforeDelete.schedules, (x) => String((x as any).weekStartDate), tombstonesByKey, []),
     templates: applyTombstones("templates_v1", mergedBeforeDelete.templates, (x) => String((x as any).id), tombstonesByKey, ["updatedAt", "createdAt"]),
+    exercises: applyTombstones("exercises_v1", mergedBeforeDelete.exercises, (x) => String((x as any).id), tombstonesByKey, ["updatedAt", "createdAt"]),
     sessions: applyTombstones("sessions_v1", mergedBeforeDelete.sessions, (x) => String((x as any).id), tombstonesByKey, ["endedAt", "startedAt"]),
     measurements: applyTombstones("measurements_local_v1", mergedBeforeDelete.measurements, measurementKey, tombstonesByKey, ["updatedAt", "createdAt", "loggedAt"]),
   };
@@ -308,6 +315,7 @@ export async function reconcileCloudToLocal(
       targets: merged.targets.length,
       schedules: merged.schedules.length,
       templates: merged.templates.length,
+      exercises: merged.exercises.length,
       sessions: merged.sessions.length,
       measurements: merged.measurements.length,
     },
@@ -317,6 +325,7 @@ export async function reconcileCloudToLocal(
       targets_v1: targetsRes.cursor,
       schedules_v1: schedulesRes.cursor,
       templates_v1: templatesRes.cursor,
+      exercises_v1: exercisesRes.cursor,
       sessions_v1: sessionsRes.cursor,
       measurements_local_v1: measurementsRes.cursor,
       tombstones_v1: tombstonesRes.cursor,

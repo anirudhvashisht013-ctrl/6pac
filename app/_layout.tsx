@@ -6,9 +6,11 @@ import React, { useEffect } from "react";
 import { GestureHandlerRootView } from "react-native-gesture-handler";
 import { SafeAreaProvider } from "react-native-safe-area-context";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
+import FeedbackToastHost from "@/components/FeedbackToastHost";
 import SubtleSplash from "@/components/SubtleSplash";
 import { queryClient } from "@/lib/query-client";
 import { AuthProvider, useAuth } from "@/context/AuthContext";
+import { FeedbackToastProvider } from "@/context/FeedbackToastContext";
 import {
   Outfit_400Regular,
   Outfit_500Medium,
@@ -72,6 +74,7 @@ function RootLayoutNav() {
       <Stack.Screen name="measurements" options={{ presentation: "modal", headerShown: false }} />
       <Stack.Screen name="profile-progress" options={{ headerShown: false }} />
       <Stack.Screen name="profile-measurements" options={{ headerShown: false }} />
+      <Stack.Screen name="exercises" options={{ headerShown: false }} />
       <Stack.Screen name="edit-profile" options={{ presentation: "modal", headerShown: false }} />
     </Stack>
   );
@@ -93,7 +96,10 @@ export default function RootLayout() {
         <AuthProvider>
           <SafeAreaProvider>
             <GestureHandlerRootView style={{ flex: 1, backgroundColor: C.bg }}>
-              <RootLayoutNav />
+              <FeedbackToastProvider>
+                <RootLayoutNav />
+                <FeedbackToastHost />
+              </FeedbackToastProvider>
             </GestureHandlerRootView>
           </SafeAreaProvider>
         </AuthProvider>

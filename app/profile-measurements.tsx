@@ -210,7 +210,9 @@ export default function ProfileMeasurementsScreen() {
 
             <Pressable
               style={({ pressed }) => [styles.primaryBtn, pressed && { opacity: 0.85 }]}
-              onPress={() => router.push("/measurements")}
+              onPress={() =>
+                router.push({ pathname: "/measurements", params: { scheduledYMD: todayYMD() } })
+              }
             >
               <Text style={styles.primaryBtnText}>Log First Measurement</Text>
             </Pressable>

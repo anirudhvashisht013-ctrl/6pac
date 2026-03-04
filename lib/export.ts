@@ -112,6 +112,32 @@ function buildMeasurementsCsv(data: LocalDataSnapshot): string[] {
   return lines;
 }
 
+function buildExercisesCsv(data: LocalDataSnapshot): string[] {
+  const lines = [
+    "=== EXERCISES ===",
+    "name,movement_type,primary_muscle,target_muscles,equipment,alternative_ids,video_urls,coaching_cues",
+  ];
+
+  for (const exercise of data.exercises) {
+    lines.push(
+      [
+        exercise.name,
+        exercise.movementType,
+        exercise.primaryMuscleGroup,
+        exercise.targetMuscles.join("; "),
+        exercise.equipment ?? "",
+        exercise.alternativeExerciseIds.join("; "),
+        exercise.referenceVideoUrls.join("; "),
+        exercise.coachingCues,
+      ]
+        .map(csvCell)
+        .join(",")
+    );
+  }
+
+  return lines;
+}
+
 export async function exportAsCSV(uid: string): Promise<string> {
   const data = await localCacheRepo.getSnapshot(uid);
   return [
@@ -120,6 +146,8 @@ export async function exportAsCSV(uid: string): Promise<string> {
     ...buildMealsCsv(data),
     "",
     ...buildSessionsCsv(data),
+    "",
+    ...buildExercisesCsv(data),
     "",
     ...buildMeasurementsCsv(data),
   ].join("\n");

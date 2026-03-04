@@ -45,6 +45,7 @@ export interface WeeklyTarget {
   dailyCaloriesTarget: number;
   dailyStepsTarget: number;
   dailyWaterMlTarget: number;
+  targetWeightKg?: number | null;
   weightGoalType: 'lose' | 'gain' | 'maintain';
   createdAt: string;
   updatedAt: string;

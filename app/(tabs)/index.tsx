@@ -1,4 +1,4 @@
-import React, { useState, useCallback } from 'react';
+import React, { useState, useCallback, useRef } from 'react';
 import {
   View, Text, ScrollView, StyleSheet, Pressable,
   TextInput, Switch, ActivityIndicator, RefreshControl, Platform,
@@ -18,6 +18,10 @@ import { generateWindow, DayWWSS, computeMaxStreakFromLogs, computeCurrentStreak
 import { getUserProfile, updateUserProfile } from '@/lib/userProfile';
 import type { DailyLog, MealEntry, WeeklyTarget } from '@/lib/types';
 import type { ISODate } from '@/lib/models';
+
+const WATER_GLASS_ML = 250;
+const DEFAULT_WATER_TARGET_ML = 2000;
+const DOUBLE_TAP_WINDOW_MS = 320;
 
 function MetricCard({
   icon, label, value, unit, onPress,
@@ -58,6 +62,7 @@ export default function TodayScreen() {
   // stable human-readable label shown in the modal. Using this prevents
   // the modal label flickering if `editField` changes during async saves.
   const [editLabel, setEditLabel] = useState('');
+  const waterTapRef = useRef<Record<number, number>>({});
 
   const load = useCallback(async () => {
     if (!user) return;
@@ -159,6 +164,12 @@ export default function TodayScreen() {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
   };
 
+  const changeWaterBy = async (deltaMl: number) => {
+    const current = log?.waterMl || 0;
+    const next = Math.max(0, current + deltaMl);
+    await saveLog({ waterMl: next });
+  };
+
   const startEdit = (field: string, current: any) => {
     setEditField(field);
     setEditValue(current != null ? String(current) : '');
@@ -190,7 +201,31 @@ export default function TodayScreen() {
     : false;
   const stepsMet = target && log?.steps ? log.steps >= target.dailyStepsTarget : false;
   const waterMet = target && log?.waterMl ? log.waterMl >= target.dailyWaterMlTarget : false;
+  const sleepLogged = log?.sleepHours != null;
+  const weightLogged = log?.weightKg != null;
   const allMet = calMet && stepsMet && waterMet;
+
+  const waterTargetMl = target?.dailyWaterMlTarget || DEFAULT_WATER_TARGET_ML;
+  const waterCurrentMl = Math.max(0, log?.waterMl || 0);
+  const activeWaterGlasses = Math.floor(waterCurrentMl / WATER_GLASS_ML);
+  const targetWaterGlasses = Math.max(1, Math.ceil(waterTargetMl / WATER_GLASS_ML));
+  const waterGlassSlots = Math.max(targetWaterGlasses, activeWaterGlasses);
+
+  const onWaterGlassPress = async (index: number) => {
+    if (saving) return;
+    const now = Date.now();
+    const lastTap = waterTapRef.current[index] || 0;
+    waterTapRef.current[index] = now;
+
+    if (index < activeWaterGlasses) {
+      if (now - lastTap <= DOUBLE_TAP_WINDOW_MS) {
+        await changeWaterBy(-WATER_GLASS_ML);
+      }
+      return;
+    }
+
+    await changeWaterBy(WATER_GLASS_ML);
+  };
 
   if (loading) {
     return (
@@ -223,33 +258,66 @@ export default function TodayScreen() {
           )}
         </View>
 
-        {target && (
-          <View style={styles.targetRow}>
-            {[
-              { label: 'C', met: calMet, hasData: totalCalories > 0 },
-              { label: 'S', met: stepsMet, hasData: !!log?.steps },
-              { label: 'W', met: waterMet, hasData: !!log?.waterMl },
-            ].map(({ label, met, hasData }) => (
-              <View key={label} style={[
-                styles.indicatorBadge,
-                met ? styles.indicatorMet : hasData ? styles.indicatorLogged : styles.indicatorEmpty,
-              ]}>
-                <Text style={[
-                  styles.indicatorText,
-                  met ? styles.indicatorTextMet : hasData ? styles.indicatorTextLogged : styles.indicatorTextEmpty,
-                ]}>{label}</Text>
-              </View>
-            ))}
-            {saving && <ActivityIndicator size="small" color={C.primary} style={{ marginLeft: 'auto' }} />}
-          </View>
-        )}
+        <View style={styles.targetRow}>
+          {[
+            { key: 'calories', icon: 'flame-outline', met: calMet, hasData: totalCalories > 0 },
+            { key: 'sleep', icon: 'moon-outline', met: sleepLogged, hasData: sleepLogged },
+            { key: 'steps', icon: 'footsteps-outline', met: stepsMet, hasData: !!log?.steps },
+            { key: 'water', icon: 'pint-outline', met: waterMet, hasData: !!log?.waterMl },
+            { key: 'weight', icon: 'scale-outline', met: weightLogged, hasData: weightLogged },
+          ].map(({ key, icon, met, hasData }) => (
+            <View key={key} style={[
+              styles.indicatorBadge,
+              met ? styles.indicatorMet : hasData ? styles.indicatorLogged : styles.indicatorEmpty,
+            ]}>
+              <Ionicons
+                name={icon as any}
+                size={16}
+                color={met ? C.success : hasData ? C.textSecondary : C.textMuted}
+              />
+            </View>
+          ))}
+          {saving && <ActivityIndicator size="small" color={C.primary} style={{ marginLeft: 'auto' }} />}
+        </View>
 
         <Text style={styles.sectionTitle}>Daily Metrics</Text>
         <View style={styles.metricsGrid}>
           <MetricCard icon="scale-outline" label="Weight" value={log?.weightKg != null ? String(log.weightKg) : ''} unit="kg" onPress={() => startEdit('weightKg', log?.weightKg)} />
           <MetricCard icon="moon-outline" label="Sleep" value={log?.sleepHours != null ? String(log.sleepHours) : ''} unit="hrs" onPress={() => startEdit('sleepHours', log?.sleepHours)} />
-          <MetricCard icon="water-outline" label="Water" value={log?.waterMl != null ? String(log.waterMl) : ''} unit="ml" onPress={() => startEdit('waterMl', log?.waterMl)} />
           <MetricCard icon="footsteps-outline" label="Steps" value={log?.steps != null ? log.steps.toLocaleString() : ''} unit="steps" onPress={() => startEdit('steps', log?.steps)} />
+        </View>
+
+        <View style={styles.waterCard}>
+          <View style={styles.waterCardTop}>
+            <View style={styles.waterCardTitleRow}>
+              <Ionicons name="pint-outline" size={16} color={C.primary} />
+              <Text style={styles.waterCardTitle}>Water Intake</Text>
+            </View>
+            <Text style={styles.waterCardValue}>
+              {waterCurrentMl.toLocaleString()} / {waterTargetMl.toLocaleString()} ml
+            </Text>
+          </View>
+          <View style={styles.glassGrid}>
+            {Array.from({ length: waterGlassSlots }).map((_, idx) => {
+              const active = idx < activeWaterGlasses;
+              return (
+                <Pressable
+                  key={idx}
+                  style={({ pressed }) => [
+                    styles.glassSlot,
+                    active && styles.glassSlotActive,
+                    pressed && { opacity: 0.85 },
+                  ]}
+                  onPress={() => {
+                    void onWaterGlassPress(idx);
+                  }}
+                >
+                  <Ionicons name="pint-outline" size={16} color={active ? C.primary : C.textMuted} />
+                </Pressable>
+              );
+            })}
+          </View>
+          <Text style={styles.waterHint}>Tap to add 250ml. Double-tap an active glass to remove 250ml.</Text>
         </View>
 
         <Pressable
@@ -379,10 +447,6 @@ const styles = StyleSheet.create({
   indicatorMet: { backgroundColor: C.successBg, borderColor: C.success },
   indicatorLogged: { backgroundColor: C.surface2, borderColor: C.borderLight },
   indicatorEmpty: { backgroundColor: C.surface2, borderColor: C.border, opacity: 0.5 },
-  indicatorText: { fontFamily: 'Outfit_700Bold', fontSize: 13 },
-  indicatorTextMet: { color: C.success },
-  indicatorTextLogged: { color: C.textSecondary },
-  indicatorTextEmpty: { color: C.textMuted },
   sectionTitle: { fontFamily: 'Outfit_600SemiBold', fontSize: 16, color: C.textSecondary, marginBottom: S.xs, marginTop: S.xs },
   metricsGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: S.xs, marginBottom: S.sm },
   metricCard: {
@@ -394,6 +458,35 @@ const styles = StyleSheet.create({
   metricLabel: { fontFamily: 'Outfit_500Medium', fontSize: 12, color: C.textMuted },
   metricValue: { fontFamily: 'Outfit_700Bold', fontSize: 22, color: C.text },
   metricUnit: { fontFamily: 'Outfit_400Regular', fontSize: 11, color: C.textMuted },
+  waterCard: {
+    backgroundColor: C.surface2,
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: C.border,
+    padding: S.md,
+    gap: 10,
+    marginBottom: S.lg,
+  },
+  waterCardTop: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', gap: 12 },
+  waterCardTitleRow: { flexDirection: 'row', alignItems: 'center', gap: 6 },
+  waterCardTitle: { fontFamily: 'Outfit_500Medium', fontSize: 14, color: C.textSecondary },
+  waterCardValue: { fontFamily: 'Outfit_600SemiBold', fontSize: 13, color: C.text },
+  glassGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
+  glassSlot: {
+    width: 32,
+    height: 32,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: C.border,
+    backgroundColor: C.surface3,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  glassSlotActive: {
+    borderColor: C.primary,
+    backgroundColor: C.primaryBg,
+  },
+  waterHint: { fontFamily: 'Outfit_400Regular', fontSize: 11, color: C.textMuted },
   supplementRow: {
     flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
     backgroundColor: C.surface2, borderRadius: 14, borderWidth: 1, borderColor: C.border,

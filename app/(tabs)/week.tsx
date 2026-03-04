@@ -1,4 +1,4 @@
-import React, { useState, useCallback } from 'react';
+import React, { useState, useCallback, useEffect, useMemo } from 'react';
 import {
   View, Text, ScrollView, StyleSheet, Pressable,
   TextInput, ActivityIndicator, Modal, Platform,
@@ -13,20 +13,41 @@ import {
   schedulesRepo, targetsRepo, logsRepo, mealsRepo,
   workoutsRepo, sessionsRepo,
 } from '@/lib/storage';
-import { todayYMD, getWeekDates, getMondayYMD, formatDateLong } from "@/lib/dates";
+import {
+  todayYMD,
+  getWeekDates,
+  getMondayYMD,
+  formatDateLong,
+  addDays,
+  toYMD,
+} from "@/lib/dates";
 import type { ISODate } from "@/lib/models";
 import type {
   WeekSchedule, WeeklyTarget, PlannedDay, WorkoutTemplate,
   DailyLog, MealEntry, WorkoutSession,
 } from '@/lib/types';
 
-const WEEK_OFFSETS = [-2, -1, 0, 1, 2];
+const WORKOUTS_PER_WEEK_TARGET = 6;
 
 type EditingTarget = {
   dailyCaloriesTarget: string;
   dailyStepsTarget: string;
   dailyWaterMlTarget: string;
+  targetWeightKg: string;
   weightGoalType: 'lose' | 'gain' | 'maintain';
+};
+
+type WeekSummary = {
+  avgWeightKg: number | null;
+  avgCalories: number | null;
+  avgSleepHours: number | null;
+  avgSteps: number | null;
+  avgWaterMl: number | null;
+  workoutsCompleted: number;
+  targetCalories: number | null;
+  targetSteps: number | null;
+  targetWaterMl: number | null;
+  targetWeightKg: number | null;
 };
 
 type DayStatus = 'planned_workout' | 'rest' | 'unplanned';
@@ -135,66 +156,187 @@ export default function WeekScreen() {
   const insets = useSafeAreaInsets();
   const { user } = useAuth();
   const today = todayYMD();
+  const currentWeekStart = getMondayYMD(today);
 
-  const [weekStart, setWeekStart] = useState(getMondayYMD());
-  const [schedule, setSchedule] = useState<WeekSchedule | null>(null);
-  const [target, setTarget] = useState<WeeklyTarget | null>(null);
+  const [weekStart, setWeekStart] = useState<ISODate>(currentWeekStart);
   const [templates, setTemplates] = useState<WorkoutTemplate[]>([]);
-  const [logs, setLogs] = useState<DailyLog[]>([]);
-  const [meals, setMeals] = useState<MealEntry[]>([]);
-  const [sessions, setSessions] = useState<WorkoutSession[]>([]);
+  const [allSchedules, setAllSchedules] = useState<WeekSchedule[]>([]);
+  const [allTargets, setAllTargets] = useState<WeeklyTarget[]>([]);
+  const [allLogs, setAllLogs] = useState<DailyLog[]>([]);
+  const [allMeals, setAllMeals] = useState<MealEntry[]>([]);
+  const [allSessions, setAllSessions] = useState<WorkoutSession[]>([]);
   const [loading, setLoading] = useState(true);
   const [editingTarget, setEditingTarget] = useState(false);
+  const [hoverWeekStart, setHoverWeekStart] = useState<ISODate | null>(null);
   const [targetForm, setTargetForm] = useState<EditingTarget>({
     dailyCaloriesTarget: '2400',
     dailyStepsTarget: '8000',
     dailyWaterMlTarget: '2500',
+    targetWeightKg: '',
     weightGoalType: 'maintain',
   });
   const [selectDayModal, setSelectDayModal] = useState<{ day: PlannedDay; idx: number } | null>(null);
 
   const load = useCallback(async () => {
-    if (!user) return;
+    if (!user) {
+      setLoading(false);
+      return;
+    }
     setLoading(true);
-    const [sched, tgt, tmpl, allLogs, allMeals, allSessions] = await Promise.all([
-      schedulesRepo.getByWeek(user.id, weekStart),
-      targetsRepo.getByWeek(user.id, weekStart),
+    const [schedules, targets, tmpl, logs, meals, sessions] = await Promise.all([
+      schedulesRepo.getAll(user.id),
+      targetsRepo.getAll(user.id),
       workoutsRepo.getAll(user.id),
       logsRepo.getAll(user.id),
       mealsRepo.getAll(user.id),
       sessionsRepo.getAll(user.id),
     ]);
 
-    const weekDates = getWeekDates(weekStart);
-    const weekDateSet = new Set<string>(weekDates);
-
-    const defaultSchedule: WeekSchedule = {
-      weekStartDate: weekStart,
-      days: weekDates.map(d => ({ date: d, status: 'unplanned', workoutTemplateId: null })),
-    };
-
-    setSchedule(sched || defaultSchedule);
-    setTarget(tgt);
+    setAllSchedules(schedules);
+    setAllTargets(targets);
     setTemplates(tmpl);
-    setLogs(allLogs.filter(l => weekDateSet.has(l.date)));
-    setMeals(allMeals.filter(m => weekDateSet.has(m.date)));
-    setSessions(allSessions.filter(s => weekDateSet.has(s.date)));
-
-    if (tgt) {
-      setTargetForm({
-        dailyCaloriesTarget: String(tgt.dailyCaloriesTarget),
-        dailyStepsTarget: String(tgt.dailyStepsTarget),
-        dailyWaterMlTarget: String(tgt.dailyWaterMlTarget),
-        weightGoalType: tgt.weightGoalType,
-      });
-    }
+    setAllLogs(logs);
+    setAllMeals(meals);
+    setAllSessions(sessions);
     setLoading(false);
-  }, [user, weekStart]);
+  }, [user]);
 
   useFocusEffect(useCallback(() => { load(); }, [load]));
 
-  const weekDates = getWeekDates(weekStart);
-  const isWeekReady = !!schedule && schedule.days.every(d => d.status !== 'unplanned');
+  const bounds = useMemo(() => {
+    let first: ISODate | null = null;
+    let latest: ISODate | null = null;
+
+    const includeWeek = (weekDate: ISODate) => {
+      if (!first || weekDate < first) first = weekDate;
+      if (!latest || weekDate > latest) latest = weekDate;
+    };
+
+    allLogs.forEach((log) => includeWeek(getMondayYMD(log.date as ISODate)));
+    allMeals.forEach((meal) => includeWeek(getMondayYMD(meal.date as ISODate)));
+    allSessions.forEach((session) => includeWeek(getMondayYMD(session.date as ISODate)));
+    allTargets.forEach((tgt) => includeWeek(tgt.weekStartDate as ISODate));
+    allSchedules.forEach((sched) => includeWeek(sched.weekStartDate as ISODate));
+    includeWeek(currentWeekStart);
+
+    return {
+      firstDataWeekStart: first || currentWeekStart,
+      latestDataWeekStart: latest || currentWeekStart,
+    };
+  }, [allLogs, allMeals, allSessions, allTargets, allSchedules, currentWeekStart]);
+
+  const firstDataWeekStart = bounds.firstDataWeekStart;
+  const latestDataWeekStart = bounds.latestDataWeekStart;
+
+  useEffect(() => {
+    if (weekStart < firstDataWeekStart) {
+      setWeekStart(firstDataWeekStart);
+      return;
+    }
+    if (weekStart > latestDataWeekStart) {
+      setWeekStart(latestDataWeekStart);
+    }
+  }, [weekStart, firstDataWeekStart, latestDataWeekStart]);
+
+  const weekTabs = useMemo(
+    () => listWeekStarts(firstDataWeekStart, latestDataWeekStart).reverse(),
+    [firstDataWeekStart, latestDataWeekStart]
+  );
+
+  const weekDates = useMemo(() => getWeekDates(weekStart), [weekStart]);
+  const weekDateSet = useMemo(() => new Set<ISODate>(weekDates), [weekDates]);
+
+  const schedule = useMemo<WeekSchedule>(() => {
+    const existing = allSchedules.find((s) => s.weekStartDate === weekStart);
+    if (existing) return existing;
+    return {
+      weekStartDate: weekStart,
+      days: weekDates.map((date) => ({ date, status: 'unplanned', workoutTemplateId: null })),
+    };
+  }, [allSchedules, weekDates, weekStart]);
+
+  const target = useMemo<WeeklyTarget | null>(
+    () => allTargets.find((t) => t.weekStartDate === weekStart) || null,
+    [allTargets, weekStart]
+  );
+
+  useEffect(() => {
+    if (target) {
+      setTargetForm({
+        dailyCaloriesTarget: String(target.dailyCaloriesTarget),
+        dailyStepsTarget: String(target.dailyStepsTarget),
+        dailyWaterMlTarget: String(target.dailyWaterMlTarget),
+        targetWeightKg: target.targetWeightKg != null ? String(target.targetWeightKg) : '',
+        weightGoalType: target.weightGoalType,
+      });
+      return;
+    }
+    setTargetForm({
+      dailyCaloriesTarget: '2400',
+      dailyStepsTarget: '8000',
+      dailyWaterMlTarget: '2500',
+      targetWeightKg: '',
+      weightGoalType: 'maintain',
+    });
+  }, [target]);
+
+  const logs = useMemo(() => allLogs.filter((l) => weekDateSet.has(l.date as ISODate)), [allLogs, weekDateSet]);
+  const meals = useMemo(() => allMeals.filter((m) => weekDateSet.has(m.date as ISODate)), [allMeals, weekDateSet]);
+  const sessions = useMemo(
+    () => allSessions.filter((s) => weekDateSet.has(s.date as ISODate)),
+    [allSessions, weekDateSet]
+  );
+
+  const weekSummaries = useMemo(() => {
+    const summaries = new Map<ISODate, WeekSummary>();
+    const targetByWeek = new Map(allTargets.map((t) => [t.weekStartDate as ISODate, t] as const));
+
+    for (const ws of weekTabs) {
+      const dates = getWeekDates(ws);
+      const datesSet = new Set<ISODate>(dates);
+      const weekLogs = allLogs.filter((l) => datesSet.has(l.date as ISODate));
+      const weekMeals = allMeals.filter((m) => datesSet.has(m.date as ISODate));
+      const weekCompletedSessions = allSessions.filter((s) => datesSet.has(s.date as ISODate) && s.completed);
+
+      const caloriesByDate = new Map<ISODate, number>();
+      for (const meal of weekMeals) {
+        if (typeof meal.calories !== 'number') continue;
+        const date = meal.date as ISODate;
+        caloriesByDate.set(date, (caloriesByDate.get(date) || 0) + meal.calories);
+      }
+      for (const log of weekLogs) {
+        if (typeof log.caloriesManual !== 'number') continue;
+        const date = log.date as ISODate;
+        caloriesByDate.set(date, (caloriesByDate.get(date) || 0) + log.caloriesManual);
+      }
+
+      const weekTarget = targetByWeek.get(ws) || null;
+      const targetWeightKg = weekTarget?.targetWeightKg ?? null;
+
+      summaries.set(ws, {
+        avgWeightKg: average(weekLogs.map((l) => l.weightKg).filter(isNumber)),
+        avgCalories: average(Array.from(caloriesByDate.values())),
+        avgSleepHours: average(weekLogs.map((l) => l.sleepHours).filter(isNumber)),
+        avgSteps: average(weekLogs.map((l) => l.steps).filter(isNumber)),
+        avgWaterMl: average(weekLogs.map((l) => l.waterMl).filter(isNumber)),
+        workoutsCompleted: Math.min(weekCompletedSessions.length, WORKOUTS_PER_WEEK_TARGET),
+        targetCalories: weekTarget?.dailyCaloriesTarget ?? null,
+        targetSteps: weekTarget?.dailyStepsTarget ?? null,
+        targetWaterMl: weekTarget?.dailyWaterMlTarget ?? null,
+        targetWeightKg,
+      });
+    }
+
+    return summaries;
+  }, [allLogs, allMeals, allSessions, allTargets, weekTabs]);
+
+  const activeWeekSummary = weekSummaries.get(weekStart) || null;
+  const tooltipWeekStart = hoverWeekStart || weekStart;
+  const tooltipSummary = weekSummaries.get(tooltipWeekStart) || null;
+  const selectedTabIndex = weekTabs.indexOf(weekStart);
+  const canGoNewer = selectedTabIndex > 0;
+  const canGoOlder = selectedTabIndex >= 0 && selectedTabIndex < weekTabs.length - 1;
+  const isWeekReady = schedule.days.every((d) => d.status !== 'unplanned');
 
   const saveTarget = async () => {
     if (!user) return;
@@ -204,23 +346,24 @@ export default function WeekScreen() {
       dailyCaloriesTarget: parseInt(targetForm.dailyCaloriesTarget) || 2000,
       dailyStepsTarget: parseInt(targetForm.dailyStepsTarget) || 8000,
       dailyWaterMlTarget: parseInt(targetForm.dailyWaterMlTarget) || 2000,
+      targetWeightKg: parseOptionalNumber(targetForm.targetWeightKg),
       weightGoalType: targetForm.weightGoalType,
       createdAt: target?.createdAt || now,
       updatedAt: now,
     };
     await targetsRepo.save(user.id, tgt);
-    setTarget(tgt);
+    setAllTargets((prev) => upsertByWeek(prev, tgt));
     setEditingTarget(false);
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
   };
 
   const updateDayStatus = async (idx: number, status: DayStatus, workoutTemplateId: string | null = null) => {
-    if (!user || !schedule) return;
+    if (!user) return;
     const newDays = [...schedule.days];
     newDays[idx] = { ...newDays[idx], status, workoutTemplateId };
     const newSchedule: WeekSchedule = { ...schedule, days: newDays };
     await schedulesRepo.save(user.id, newSchedule);
-    setSchedule(newSchedule);
+    setAllSchedules((prev) => upsertByWeek(prev, newSchedule));
     setSelectDayModal(null);
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
   };
@@ -235,13 +378,10 @@ export default function WeekScreen() {
   const getSessionsForDate = (date: string) => sessions.filter(s => s.date === date);
 
   const weeklyStats = {
-    workoutsPlanned: schedule?.days.filter(d => d.status === 'planned_workout').length || 0,
-    workoutsCompleted: sessions.filter(s => s.completed).length,
-    avgCalories: logs.reduce((s, l) => {
-      const ml = meals.filter(m => m.date === l.date).reduce((a, m) => a + (m.calories || 0), 0);
-      return s + ml + (l.caloriesManual || 0);
-    }, 0) / (logs.length || 1),
-    avgSteps: logs.reduce((s, l) => s + (l.steps || 0), 0) / (logs.length || 1),
+    workoutsPlanned: schedule.days.filter((d) => d.status === 'planned_workout').length,
+    workoutsCompleted: activeWeekSummary?.workoutsCompleted || 0,
+    avgCalories: activeWeekSummary?.avgCalories || 0,
+    avgSteps: activeWeekSummary?.avgSteps || 0,
     weightChange: (() => {
       const wLogs = logs.filter(l => l.weightKg).sort((a, b) => a.date.localeCompare(b.date));
       if (wLogs.length < 2) return null;
@@ -249,7 +389,15 @@ export default function WeekScreen() {
     })(),
   };
 
-  const weekOffsets = [-2, -1, 0, 1, 2];
+  const goToNewerWeek = () => {
+    if (!canGoNewer) return;
+    setWeekStart(weekTabs[selectedTabIndex - 1]);
+  };
+
+  const goToOlderWeek = () => {
+    if (!canGoOlder) return;
+    setWeekStart(weekTabs[selectedTabIndex + 1]);
+  };
 
   return (
     <View style={{ flex: 1, backgroundColor: C.bg }}>
@@ -263,21 +411,69 @@ export default function WeekScreen() {
       >
         <Text style={styles.pageTitle}>Week</Text>
 
+        <View style={styles.weekNavRow}>
+          <Pressable
+            style={({ pressed }) => [
+              styles.weekJumpBtn,
+              weekStart === firstDataWeekStart && styles.weekJumpBtnDisabled,
+              pressed && { opacity: 0.85 },
+            ]}
+            onPress={() => setWeekStart(firstDataWeekStart)}
+            disabled={weekStart === firstDataWeekStart}
+          >
+            <Text style={styles.weekJumpBtnText}>First week</Text>
+          </Pressable>
+          <View style={styles.weekQuickNav}>
+            <Pressable
+              style={({ pressed }) => [
+                styles.weekArrowBtn,
+                !canGoNewer && styles.weekArrowBtnDisabled,
+                pressed && { opacity: 0.85 },
+              ]}
+              onPress={goToNewerWeek}
+              disabled={!canGoNewer}
+            >
+              <Ionicons name="chevron-back" size={16} color={canGoNewer ? C.textSecondary : C.textMuted} />
+            </Pressable>
+            <Pressable
+              style={({ pressed }) => [
+                styles.weekJumpBtn,
+                weekStart === currentWeekStart && styles.weekJumpBtnDisabled,
+                pressed && { opacity: 0.85 },
+              ]}
+              onPress={() => setWeekStart(currentWeekStart)}
+              disabled={weekStart === currentWeekStart}
+            >
+              <Text style={styles.weekJumpBtnText}>This week</Text>
+            </Pressable>
+            <Pressable
+              style={({ pressed }) => [
+                styles.weekArrowBtn,
+                !canGoOlder && styles.weekArrowBtnDisabled,
+                pressed && { opacity: 0.85 },
+              ]}
+              onPress={goToOlderWeek}
+              disabled={!canGoOlder}
+            >
+              <Ionicons name="chevron-forward" size={16} color={canGoOlder ? C.textSecondary : C.textMuted} />
+            </Pressable>
+          </View>
+        </View>
+
         <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.weekSelector}>
-          {weekOffsets.map(offset => {
-            const d = new Date();
-            d.setDate(d.getDate() + offset * 7);
-            const ws = getMondayYMD(d);
+          {weekTabs.map((ws) => {
             const isCurrent = ws === weekStart;
-            const isThisWeek = ws === getMondayYMD();
+            const isThisWeek = ws === currentWeekStart;
             return (
               <Pressable
                 key={ws}
                 style={[styles.weekSlot, isCurrent && styles.weekSlotActive]}
                 onPress={() => setWeekStart(ws)}
+                onHoverIn={Platform.OS === 'web' ? () => setHoverWeekStart(ws) : undefined}
+                onHoverOut={Platform.OS === 'web' ? () => setHoverWeekStart((prev) => (prev === ws ? null : prev)) : undefined}
               >
                 <Text style={[styles.weekSlotMonth, isCurrent && styles.weekSlotTextActive]}>
-                  {monthLabel(ws)}
+                  {monthYearLabel(ws)}
                 </Text>
                 <Text style={[styles.weekSlotNum, isCurrent && styles.weekSlotTextActive]}>
                   W{getWeekNumber(ws)}
@@ -287,6 +483,50 @@ export default function WeekScreen() {
             );
           })}
         </ScrollView>
+
+        {tooltipSummary && (
+          <View style={styles.weekTooltipCard}>
+            <Text style={styles.weekTooltipTitle}>
+              {monthYearLabel(tooltipWeekStart)} • W{getWeekNumber(tooltipWeekStart)}
+            </Text>
+            <View style={styles.weekTooltipGrid}>
+              <View style={styles.weekTooltipItem}>
+                <Text style={styles.weekTooltipLabel}>Weight</Text>
+                <Text style={styles.weekTooltipValue}>
+                  {formatMetricWithTarget(tooltipSummary.avgWeightKg, tooltipSummary.targetWeightKg, 1)} kg
+                </Text>
+              </View>
+              <View style={styles.weekTooltipItem}>
+                <Text style={styles.weekTooltipLabel}>Calories</Text>
+                <Text style={styles.weekTooltipValue}>
+                  {formatMetricWithTarget(tooltipSummary.avgCalories, tooltipSummary.targetCalories)} kcal
+                </Text>
+              </View>
+              <View style={styles.weekTooltipItem}>
+                <Text style={styles.weekTooltipLabel}>Sleep</Text>
+                <Text style={styles.weekTooltipValue}>{formatMetric(tooltipSummary.avgSleepHours, 1)} h</Text>
+              </View>
+              <View style={styles.weekTooltipItem}>
+                <Text style={styles.weekTooltipLabel}>Steps</Text>
+                <Text style={styles.weekTooltipValue}>
+                  {formatMetricWithTarget(tooltipSummary.avgSteps, tooltipSummary.targetSteps)}
+                </Text>
+              </View>
+              <View style={styles.weekTooltipItem}>
+                <Text style={styles.weekTooltipLabel}>Water</Text>
+                <Text style={styles.weekTooltipValue}>
+                  {formatMetricWithTarget(tooltipSummary.avgWaterMl, tooltipSummary.targetWaterMl)} ml
+                </Text>
+              </View>
+              <View style={styles.weekTooltipItem}>
+                <Text style={styles.weekTooltipLabel}>Workouts</Text>
+                <Text style={styles.weekTooltipValue}>
+                  {tooltipSummary.workoutsCompleted}/{WORKOUTS_PER_WEEK_TARGET}
+                </Text>
+              </View>
+            </View>
+          </View>
+        )}
 
         {!isWeekReady && (
           <View style={styles.warningBanner}>
@@ -315,6 +555,7 @@ export default function WeekScreen() {
               { key: 'dailyCaloriesTarget', label: 'Daily Calories', unit: 'kcal', kbType: 'numeric' },
               { key: 'dailyStepsTarget', label: 'Daily Steps', unit: 'steps', kbType: 'numeric' },
               { key: 'dailyWaterMlTarget', label: 'Daily Water', unit: 'ml', kbType: 'numeric' },
+              { key: 'targetWeightKg', label: 'Target Weight', unit: 'kg', kbType: 'decimal-pad' },
             ].map(({ key, label, unit, kbType }) => (
               <View key={key} style={styles.targetEditRow}>
                 <Text style={styles.targetEditLabel}>{label}</Text>
@@ -353,10 +594,13 @@ export default function WeekScreen() {
               { label: 'Calories', val: target.dailyCaloriesTarget, unit: 'kcal', icon: 'flame-outline' },
               { label: 'Steps', val: target.dailyStepsTarget, unit: 'steps', icon: 'footsteps-outline' },
               { label: 'Water', val: target.dailyWaterMlTarget, unit: 'ml', icon: 'water-outline' },
+              { label: 'Weight', val: target.targetWeightKg ?? null, unit: 'kg', icon: 'scale-outline' },
             ].map(({ label, val, unit, icon }) => (
               <View key={label} style={styles.targetCard}>
                 <Ionicons name={icon as any} size={16} color={C.primary} />
-                <Text style={styles.targetCardVal}>{val.toLocaleString()}</Text>
+                <Text style={styles.targetCardVal}>
+                  {typeof val === 'number' ? formatMetric(val, unit === 'kg' ? 1 : 0) : '—'}
+                </Text>
                 <Text style={styles.targetCardLabel}>{label}</Text>
               </View>
             ))}
@@ -373,7 +617,7 @@ export default function WeekScreen() {
         {loading ? (
           <ActivityIndicator color={C.primary} style={{ marginVertical: 20 }} />
         ) : (
-          schedule?.days.map((day, idx) => (
+          schedule.days.map((day, idx) => (
             <DayCard
               key={day.date}
               day={day}
@@ -471,13 +715,63 @@ function formatDate(date: string) {
   return formatDateLong(date as ISODate);
 }
 
-function monthLabel(weekStart: string) {
+function monthYearLabel(weekStart: ISODate) {
   const d = new Date(`${weekStart}T00:00:00`);
-  return d.toLocaleDateString(undefined, { month: "short" });
+  return d.toLocaleDateString(undefined, { month: "short", year: "2-digit" });
+}
+
+function listWeekStarts(startWeek: ISODate, endWeek: ISODate): ISODate[] {
+  const list: ISODate[] = [];
+  const end = new Date(`${endWeek}T00:00:00`);
+  let cursor = new Date(`${startWeek}T00:00:00`);
+
+  while (cursor.getTime() <= end.getTime()) {
+    list.push(toYMD(cursor));
+    cursor = addDays(cursor, 7);
+  }
+
+  return list;
+}
+
+function upsertByWeek<T extends { weekStartDate: string }>(items: T[], nextItem: T): T[] {
+  const idx = items.findIndex((item) => item.weekStartDate === nextItem.weekStartDate);
+  if (idx === -1) return [...items, nextItem];
+  const next = [...items];
+  next[idx] = nextItem;
+  return next;
+}
+
+function isNumber(value: number | null): value is number {
+  return typeof value === 'number' && Number.isFinite(value);
+}
+
+function average(values: number[]): number | null {
+  if (values.length === 0) return null;
+  return values.reduce((sum, value) => sum + value, 0) / values.length;
+}
+
+function parseOptionalNumber(value: string): number | null {
+  const clean = value.trim();
+  if (!clean) return null;
+  const parsed = parseFloat(clean);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function formatMetric(value: number | null, decimals = 0) {
+  if (value === null) return '—';
+  if (decimals > 0) return value.toFixed(decimals);
+  return Math.round(value).toLocaleString();
+}
+
+function formatMetricWithTarget(avg: number | null, target: number | null, decimals = 0) {
+  const avgText = formatMetric(avg, decimals);
+  if (target === null) return avgText;
+  const targetText = formatMetric(target, decimals);
+  return `${avgText}/${targetText}`;
 }
 
 // ISO week number (standard-ish)
-function getWeekNumber(weekStart: string) {
+function getWeekNumber(weekStart: ISODate) {
   const d = new Date(`${weekStart}T00:00:00`);
   const tmp = new Date(Date.UTC(d.getFullYear(), d.getMonth(), d.getDate()));
   const dayNum = tmp.getUTCDay() || 7;
@@ -489,11 +783,42 @@ function getWeekNumber(weekStart: string) {
 const styles = StyleSheet.create({
   content: { paddingHorizontal: 20 },
   pageTitle: { fontFamily: 'Outfit_700Bold', fontSize: 30, color: C.text, marginBottom: 16 },
+  weekNavRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    gap: 10,
+    marginBottom: 10,
+  },
+  weekQuickNav: { flexDirection: 'row', alignItems: 'center', gap: 8, flexShrink: 1 },
+  weekJumpBtn: {
+    height: 34,
+    borderRadius: 9,
+    borderWidth: 1,
+    borderColor: C.border,
+    backgroundColor: C.surface2,
+    paddingHorizontal: 10,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  weekJumpBtnDisabled: { opacity: 0.45 },
+  weekJumpBtnText: { fontFamily: 'Outfit_500Medium', fontSize: 12, color: C.textSecondary },
+  weekArrowBtn: {
+    width: 34,
+    height: 34,
+    borderRadius: 9,
+    borderWidth: 1,
+    borderColor: C.border,
+    backgroundColor: C.surface2,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  weekArrowBtnDisabled: { opacity: 0.45 },
   weekSelector: { marginHorizontal: -20, paddingHorizontal: 20, marginBottom: 16 },
   weekSlot: {
     paddingHorizontal: 14, paddingVertical: 10, marginRight: 8,
     backgroundColor: C.surface2, borderRadius: 12, borderWidth: 1, borderColor: C.border,
-    alignItems: 'center', minWidth: 70,
+    alignItems: 'center', minWidth: 82,
   },
   weekSlotActive: { borderColor: C.primary, backgroundColor: C.primaryBg },
   weekSlotMonth: { fontFamily: 'Outfit_400Regular', fontSize: 11, color: C.textMuted },
@@ -502,6 +827,20 @@ const styles = StyleSheet.create({
   currentDot: {
     width: 5, height: 5, borderRadius: 3, backgroundColor: C.primary, marginTop: 4,
   },
+  weekTooltipCard: {
+    backgroundColor: C.surface2,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: C.border,
+    padding: 12,
+    gap: 10,
+    marginBottom: 16,
+  },
+  weekTooltipTitle: { fontFamily: 'Outfit_600SemiBold', fontSize: 13, color: C.textSecondary },
+  weekTooltipGrid: { flexDirection: 'row', flexWrap: 'wrap', rowGap: 10, columnGap: 8 },
+  weekTooltipItem: { minWidth: '30%', flex: 1 },
+  weekTooltipLabel: { fontFamily: 'Outfit_400Regular', fontSize: 11, color: C.textMuted },
+  weekTooltipValue: { fontFamily: 'Outfit_600SemiBold', fontSize: 13, color: C.text, marginTop: 1 },
   warningBanner: {
     flexDirection: 'row', alignItems: 'center', gap: 8,
     backgroundColor: C.warningBg, borderRadius: 10, padding: 12, marginBottom: 16,

@@ -1,8 +1,19 @@
 // lib/seed.ts
-import type { DailySnapshot, BodyMeasurementEntry } from "@/lib/models";
-import { todayYMD, toYMD, addDays } from "@/lib/dates";
-import { daysRepo } from "@/lib/repos/daysRepo";
-import { measurementsRepo } from "@/lib/repos/measurementsRepo";
+import { toYMD, addDays, getMondayYMD } from "@/lib/dates";
+import {
+  logsRepo,
+  mealsRepo,
+  sessionsRepo,
+  targetsRepo,
+  measurementsRepo,
+} from "@/lib/storage";
+import type {
+  BodyMeasurementEntry,
+  DailyLog,
+  MealEntry,
+  WeeklyTarget,
+  WorkoutSession,
+} from "@/lib/types";
 
 function rand(min: number, max: number) {
   return Math.random() * (max - min) + min;
@@ -16,7 +27,7 @@ function chance(p: number) {
 
 /**
  * Seeds realistic dummy data for the CURRENT logged-in user.
- * - Daily snapshots: last `daysBack` days
+ * - Local logs/meals/sessions/targets for last `daysBack` days
  * - Measurements: every ~14 days over last `measureDaysBack` days
  */
 export async function seedTestUser(
@@ -24,14 +35,14 @@ export async function seedTestUser(
   daysBack = 90,
   measureDaysBack = 180
 ): Promise<void> {
-  const endYMD = todayYMD();
-  const endDate = new Date(); // use a real Date for math
-
-  // --- Daily Snapshots ---
+  const endDate = new Date();
+  const weekStarts = new Set<string>();
+  const nowIso = new Date().toISOString();
   let weight = 90;
 
   for (let i = daysBack - 1; i >= 0; i--) {
     const date = toYMD(addDays(endDate, -i));
+    weekStarts.add(getMondayYMD(date));
 
     weight = weight + rand(-0.15, 0.1);
 
@@ -41,58 +52,77 @@ export async function seedTestUser(
     const trackedWater = chance(0.8);
     const trackedSleep = chance(0.75);
 
-    const calories = trackedNutrition ? randInt(1800, 2700) : null;
-    const proteinG = trackedNutrition ? randInt(110, 190) : null;
-    const carbsG = trackedNutrition ? randInt(140, 260) : null;
-    const fatG = trackedNutrition ? randInt(45, 90) : null;
-
-    const steps = trackedSteps ? randInt(3000, 12000) : null;
-    const waterMl = trackedWater ? randInt(1500, 4000) : null;
+    const steps = trackedSteps ? randInt(3500, 12000) : null;
+    const waterMl = trackedWater ? randInt(1600, 4000) : null;
     const sleepHours = trackedSleep ? Number(rand(5.5, 8.5).toFixed(1)) : null;
 
-    const workoutMinutes = didWorkout ? randInt(25, 80) : null;
-    const workoutName = didWorkout
-      ? chance(0.5)
-        ? "Strength"
-        : chance(0.5)
-          ? "Cardio"
-          : "Mixed"
-      : null;
-
-    const hitCalories = calories == null ? null : chance(0.6);
-    const hitProtein = proteinG == null ? null : chance(0.55);
-    const hitSteps = steps == null ? null : chance(0.5);
-    const hitWater = waterMl == null ? null : chance(0.6);
-
-    // IMPORTANT:
-    // daysRepo.upsert(uid, date, patch) expects (uid, date, patch)
-    // and it will set updatedAt/date internally.
-    const patch: Partial<DailySnapshot> = {
-      date, // harmless even if merged, but optional
+    const log: DailyLog = {
+      date,
       weightKg: Number(weight.toFixed(1)),
       sleepHours,
       steps,
       waterMl,
-      calories,
-      proteinG,
-      carbsG,
-      fatG,
-      didWorkout,
-      workoutMinutes,
-      workoutName,
-      workoutSessionIds: [],
-      hitCalories,
-      hitProtein,
-      hitSteps,
-      hitWater,
       supplementsTaken: chance(0.35),
+      caloriesManual: trackedNutrition && chance(0.3) ? randInt(120, 500) : null,
       notes: chance(0.08) ? "seeded" : null,
+      updatedAt: nowIso,
     };
+    await logsRepo.save(uid, log);
 
-    await daysRepo.upsert(uid, date, patch);
+    if (trackedNutrition) {
+      const mealCount = randInt(2, 4);
+      for (let mealIndex = 0; mealIndex < mealCount; mealIndex += 1) {
+        const meal: MealEntry = {
+          id: `seed-meal-${date}-${mealIndex}`,
+          date,
+          mealName:
+            mealIndex === 0 ? "Breakfast" : mealIndex === 1 ? "Lunch" : mealIndex === 2 ? "Dinner" : "Snack",
+          notes: chance(0.2) ? "seeded" : null,
+          calories: randInt(300, 900),
+          proteinG: randInt(18, 55),
+          carbsG: randInt(20, 100),
+          fatG: randInt(8, 35),
+          createdAt: nowIso,
+          updatedAt: nowIso,
+        };
+        await mealsRepo.save(uid, meal);
+      }
+    }
+
+    if (didWorkout) {
+      const start = new Date(`${date}T00:00:00.000Z`);
+      start.setUTCHours(randInt(5, 20), randInt(0, 50), 0, 0);
+
+      const durationMin = randInt(25, 80);
+      const end = new Date(start.getTime() + durationMin * 60 * 1000);
+
+      const session: WorkoutSession = {
+        id: `seed-session-${date}`,
+        date,
+        workoutTemplateId: "seed-template",
+        workoutNameSnapshot: chance(0.5) ? "Strength" : chance(0.5) ? "Cardio" : "Mixed",
+        startedAt: start.toISOString(),
+        endedAt: end.toISOString(),
+        completed: true,
+        blockPerformances: [],
+      };
+      await sessionsRepo.save(uid, session);
+    }
   }
 
-  // --- Measurements (every ~14 days) ---
+  for (const weekStartDate of weekStarts) {
+    const target: WeeklyTarget = {
+      weekStartDate,
+      dailyCaloriesTarget: 2400,
+      dailyStepsTarget: 8000,
+      dailyWaterMlTarget: 2500,
+      weightGoalType: "maintain",
+      createdAt: nowIso,
+      updatedAt: nowIso,
+    };
+    await targetsRepo.save(uid, target);
+  }
+
   let waist = 92;
   let bf = 20;
 
@@ -115,9 +145,11 @@ export async function seedTestUser(
       bicepsL: Number(rand(30, 36).toFixed(1)),
       bodyFatPercent: Number(bf.toFixed(1)),
       notes: "seeded",
-      createdAt: new Date(),
+      createdAt: nowIso,
+      loggedAt: nowIso,
+      updatedAt: nowIso,
     };
 
-    await measurementsRepo.upsert(uid, entry);
+    await measurementsRepo.save(uid, entry);
   }
 }

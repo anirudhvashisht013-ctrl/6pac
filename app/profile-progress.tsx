@@ -12,7 +12,7 @@ import type { DailySnapshot } from "@/lib/models";
 import { presetRange } from "@/lib/ranges";
 import { toSeries, compactSeries } from "@/lib/series";
 import { movingAverage, linearTrend } from "@/lib/trends";
-import { daysRepo } from "@/lib/repos/daysRepo";
+import { getProgressRange } from "@/lib/progress/localProgressRepo";
 
 const SCREEN_W = Dimensions.get("window").width;
 const CHART_W = SCREEN_W - 64;
@@ -81,7 +81,7 @@ export default function ProfileProgressScreen() {
     if (!user) return;
     setLoading(true);
     try {
-      const d = await daysRepo.getRange(user.id, range.start as any, range.end as any);
+      const d = await getProgressRange(user.id, range.start, range.end);
       setDays(d);
     } finally {
       setLoading(false);

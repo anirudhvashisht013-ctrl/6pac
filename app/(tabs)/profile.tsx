@@ -1,6 +1,6 @@
 // app/(tabs)/profile.tsx
 import React, { useCallback, useState } from "react";
-import { View, Text, ScrollView, StyleSheet, Pressable, ActivityIndicator, Platform } from "react-native";
+import { Alert, View, Text, ScrollView, StyleSheet, Pressable, ActivityIndicator, Platform } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
 import { useFocusEffect, router } from "expo-router";
@@ -10,7 +10,8 @@ import { useAuth } from "@/context/AuthContext";
 import { getUserProfile } from "@/lib/userProfile";
 import { confirm } from "@/lib/ui/confirm";
 import { seedTestUser } from "@/lib/seed";
-import { exportLocalBackup } from "@/lib/backup/exportLocalBackup";
+import { getMigrationStatus, migrateAllDataToCloud } from "@/lib/dev/migrate";
+import { exportAsCSVFile, exportAsJSONFile } from "@/lib/export";
 import { useMirrorSyncState } from "@/lib/sync/mirrorQueue";
 import { useNetworkStatus } from "@/lib/network";
 
@@ -30,24 +31,34 @@ export default function ProfileHubScreen() {
   const [profile, setProfile] = useState<ProfileDoc | null>(null);
   const [loadingProfile, setLoadingProfile] = useState(true);
   const [seeding, setSeeding] = useState(false);
-  const [exporting, setExporting] = useState(false);
+  const [migrating, setMigrating] = useState(false);
+  const [migrationStatus, setMigrationStatus] = useState<{
+    migrated: boolean;
+    migratedAt: string | null;
+  }>({ migrated: false, migratedAt: null });
+  const [exportingJson, setExportingJson] = useState(false);
+  const [exportingCsv, setExportingCsv] = useState(false);
   const logoutColor = C.error;
 
   const loadProfile = useCallback(async () => {
     if (!user) return;
     setLoadingProfile(true);
     try {
-      const p = await getUserProfile(user.id);
+      const [p, migration] = await Promise.all([
+        getUserProfile(user.id),
+        getMigrationStatus(user.id),
+      ]);
       if (!p) {
         setProfile(null);
-        return;
+      } else {
+        setProfile({
+          email: p.email,
+          fullName: p.fullName,
+          dateOfBirth: p.dateOfBirth,
+          sex: p.sex,
+        });
       }
-      setProfile({
-        email: p.email,
-        fullName: p.fullName,
-        dateOfBirth: p.dateOfBirth,
-        sex: p.sex,
-      });
+      setMigrationStatus(migration);
     } finally {
       setLoadingProfile(false);
     }
@@ -64,7 +75,7 @@ export default function ProfileHubScreen() {
 
     const ok = await confirm({
       title: "Seed test data?",
-      message: "This will write dummy day + measurement records to Firestore for THIS logged-in account.",
+      message: "This will write dummy local logs, meals, workouts, targets, and measurements for this account.",
       okText: "Seed",
       cancelText: "Cancel",
       destructive: true,
@@ -80,13 +91,53 @@ export default function ProfileHubScreen() {
     }
   }, [user]);
 
-  const onExportBackup = useCallback(async () => {
+  const onExportJson = useCallback(async () => {
     if (!user) return;
     try {
-      setExporting(true);
-      await exportLocalBackup(user.id);
+      setExportingJson(true);
+      await exportAsJSONFile(user.id);
+      Alert.alert("Export Complete", "JSON export is ready.");
+    } catch (error) {
+      Alert.alert("Export Failed", String(error));
     } finally {
-      setExporting(false);
+      setExportingJson(false);
+    }
+  }, [user]);
+
+  const onExportCsv = useCallback(async () => {
+    if (!user) return;
+    try {
+      setExportingCsv(true);
+      await exportAsCSVFile(user.id);
+      Alert.alert("Export Complete", "CSV export is ready.");
+    } catch (error) {
+      Alert.alert("Export Failed", String(error));
+    } finally {
+      setExportingCsv(false);
+    }
+  }, [user]);
+
+  const onMigrate = useCallback(async () => {
+    if (!user) return;
+    try {
+      setMigrating(true);
+      const result = await migrateAllDataToCloud(user.id);
+      const message =
+        result.status === "success"
+          ? `${result.total} items uploaded to cloud`
+          : result.status === "partial"
+            ? `${result.total} items uploaded, but some failed (${result.error || "partial"})`
+            : result.error || "Migration failed";
+
+      Alert.alert(
+        result.status === "error" ? "Migration Failed" : "Migration Complete",
+        message
+      );
+      setMigrationStatus(await getMigrationStatus(user.id));
+    } catch (error) {
+      Alert.alert("Migration Failed", String(error));
+    } finally {
+      setMigrating(false);
     }
   }, [user]);
 
@@ -106,6 +157,13 @@ export default function ProfileHubScreen() {
       : sync.lastSyncedAt
         ? `Last synced ${new Date(sync.lastSyncedAt).toLocaleString()}`
         : "No pending changes";
+  const migrationTitle =
+    migrationStatus.migrated && migrationStatus.migratedAt
+      ? `Last migrated at ${new Date(migrationStatus.migratedAt).toLocaleString()}`
+      : "Not migrated yet";
+  const migrationSubtitle = migrationStatus.migrated
+    ? "Local data backup to cloud completed."
+    : 'Run "Backup Data to Cloud" to upload existing local data.';
 
   return (
     <View style={{ flex: 1, backgroundColor: C.bg }}>
@@ -217,14 +275,46 @@ export default function ProfileHubScreen() {
           </View>
         </View>
 
+        <View style={styles.syncCard}>
+          <View style={styles.syncCardLeft}>
+            <Ionicons
+              name={migrationStatus.migrated ? "cloud-done-outline" : "cloud-upload-outline"}
+              size={18}
+              color={migrationStatus.migrated ? C.success : C.warning}
+            />
+            <View style={{ flex: 1 }}>
+              <Text style={styles.syncTitle}>{migrationTitle}</Text>
+              <Text style={styles.syncSubtitle}>{migrationSubtitle}</Text>
+            </View>
+          </View>
+        </View>
+
         <View style={styles.actionsWrap}>
           <Pressable
             style={({ pressed }) => [styles.actionBtn, pressed && { opacity: 0.85 }]}
-            onPress={onExportBackup}
-            disabled={exporting}
+            onPress={onExportJson}
+            disabled={exportingJson}
           >
             <Ionicons name="download-outline" size={16} color={C.primary} />
-            <Text style={styles.actionBtnText}>{exporting ? "Exporting..." : "Export Backup"}</Text>
+            <Text style={styles.actionBtnText}>{exportingJson ? "Exporting..." : "Export JSON"}</Text>
+          </Pressable>
+
+          <Pressable
+            style={({ pressed }) => [styles.actionBtn, pressed && { opacity: 0.85 }]}
+            onPress={onExportCsv}
+            disabled={exportingCsv}
+          >
+            <Ionicons name="document-text-outline" size={16} color={C.primary} />
+            <Text style={styles.actionBtnText}>{exportingCsv ? "Exporting..." : "Export CSV"}</Text>
+          </Pressable>
+
+          <Pressable
+            style={({ pressed }) => [styles.actionBtn, pressed && { opacity: 0.85 }]}
+            onPress={onMigrate}
+            disabled={migrating}
+          >
+            <Ionicons name="cloud-upload-outline" size={16} color={C.primary} />
+            <Text style={styles.actionBtnText}>{migrating ? "Migrating..." : "Backup Data to Cloud"}</Text>
           </Pressable>
 
           <Pressable

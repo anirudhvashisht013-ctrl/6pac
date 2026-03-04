@@ -31,7 +31,7 @@ import {
   type SlotStatus,
 } from "@/lib/measurements/slots";
 import { presetRange } from "@/lib/ranges";
-import { measurementsRepo } from "@/lib/repos/measurementsRepo";
+import { measurementsRepo } from "@/lib/storage";
 import { todayYMD } from "@/lib/dates";
 
 type MonthTab = { key: string; label: string };
@@ -79,7 +79,12 @@ export default function ProfileMeasurementsScreen() {
     setLoading(true);
     try {
       const m = await measurementsRepo.getRange(user.id, measurementRange.start, measurementRange.end);
-      setMeasurements(m);
+      setMeasurements(
+        m.map((entry) => ({
+          ...entry,
+          date: entry.date as ISODate,
+        }))
+      );
     } finally {
       setLoading(false);
     }

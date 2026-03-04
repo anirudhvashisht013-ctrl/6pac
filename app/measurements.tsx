@@ -19,7 +19,7 @@ import { C } from "@/constants/colors";
 import { S } from "@/constants/spacing";
 import { useAuth } from "@/context/AuthContext";
 import { canLogMeasurementDay } from "@/lib/measurements/slots";
-import { measurementsRepo } from "@/lib/repos/measurementsRepo";
+import { measurementsRepo } from "@/lib/storage";
 import type { BodyMeasurementEntry, ISODate } from "@/lib/models";
 
 const CM_PER_IN = 2.54;
@@ -151,7 +151,7 @@ export default function MeasurementsScreen() {
         loggedAt: new Date().toISOString(),
       };
 
-      await measurementsRepo.upsert(user.id, entry);
+      await measurementsRepo.save(user.id, entry);
 
       await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
       router.back();

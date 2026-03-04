@@ -18,6 +18,7 @@ import { auth } from "@/lib/firebase";
 import { ensureUserProfile, getUserProfile, markOnboardingDone } from "@/lib/userProfile";
 import { ensureAutoBackupOnce } from "@/lib/backup/autoBackupOnce";
 import { reconcileCloudToLocal } from "@/lib/sync/reconcile";
+import { syncNow } from "@/lib/sync/syncNow";
 import { getIsOnline, subscribeNetworkStatus } from "@/lib/network";
 
 type AppUser = {
@@ -121,6 +122,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     const uid = user?.id;
     if (!uid) return;
+
+    void syncNow(uid).catch((err) => {
+      console.warn("initial sync failed", err);
+    });
 
     const reconcileIfOnline = () => {
       if (!getIsOnline()) return;

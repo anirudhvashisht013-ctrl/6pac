@@ -5,6 +5,10 @@ import type {
 } from './types';
 import { cloudMirrorRepo } from "@/lib/repos/cloudMirrorRepo";
 import { measurementDocId, normalizeMeasurementEntry } from "@/lib/measurements/identity";
+import {
+  getMeasurementByDate,
+  getMeasurementRange,
+} from "@/lib/measurements/localMeasurementsQuery";
 
 const KEY = {
   users: '@6pac:users',
@@ -250,6 +254,14 @@ export const measurementsRepo = {
   async getAll(uid: string): Promise<BodyMeasurementEntry[]> {
     const all = (await get<BodyMeasurementEntry[]>(KEY.measurements(uid))) || [];
     return all.map(normalizeMeasurementEntry);
+  },
+  async getByDate(uid: string, date: string): Promise<BodyMeasurementEntry | null> {
+    const all = await this.getAll(uid);
+    return getMeasurementByDate(all, date);
+  },
+  async getRange(uid: string, start: string, end: string): Promise<BodyMeasurementEntry[]> {
+    const all = await this.getAll(uid);
+    return getMeasurementRange(all, start, end);
   },
   async save(uid: string, entry: BodyMeasurementEntry): Promise<void> {
     const normalized = normalizeMeasurementEntry(entry);

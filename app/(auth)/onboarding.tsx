@@ -8,6 +8,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { router } from 'expo-router';
 import { C } from '@/constants/colors';
 import { useAuth } from '@/context/AuthContext';
+import { migrateAllDataToCloud } from '@/lib/dev/migrate';
 
 type Step = 'name' | 'dob' | 'sex' | 'weight' | 'goal';
 
@@ -129,6 +130,14 @@ export default function OnboardingScreen() {
         goalType: goal,
       });
 
+      try {
+        console.log("🔄 Migrating existing local data to cloud...");
+        const migration = await migrateAllDataToCloud(user.id);
+        console.log("✅ Migration result:", migration);
+      } catch (migrationError) {
+        console.warn("migration during onboarding failed", migrationError);
+      }
+
       // ✅ Go to tabs home
       router.replace('/(tabs)');
     } catch (e: any) {
@@ -163,8 +172,8 @@ export default function OnboardingScreen() {
         <View style={styles.content}>
           {step === 'name' && (
             <>
-              <Text style={styles.question}>What's your name?</Text>
-              <Text style={styles.hint}>We'll personalize your experience</Text>
+              <Text style={styles.question}>What&apos;s your name?</Text>
+              <Text style={styles.hint}>We&apos;ll personalize your experience</Text>
               <View style={styles.inputWrap}>
                 <TextInput
                   style={styles.input}
@@ -243,7 +252,7 @@ export default function OnboardingScreen() {
 
           {step === 'goal' && (
             <>
-              <Text style={styles.question}>What's your goal?</Text>
+              <Text style={styles.question}>What&apos;s your goal?</Text>
               <Text style={styles.hint}>This guides your weekly plan</Text>
               <View style={styles.goalList}>
                 {GOALS.map(g => (
@@ -287,7 +296,7 @@ export default function OnboardingScreen() {
             ) : (
               <>
                 <Text style={styles.nextBtnText}>
-                  {step === 'goal' ? "Let's go!" : 'Continue'}
+                  {step === 'goal' ? "Let&apos;s go!" : 'Continue'}
                 </Text>
                 <Ionicons name="arrow-forward" size={18} color={C.bg} />
               </>

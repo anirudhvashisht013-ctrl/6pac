@@ -17,6 +17,7 @@ import {
   useFonts,
 } from "@expo-google-fonts/outfit";
 import { C } from "@/constants/colors";
+import { initializeFirestoreOffline } from "@/lib/firebase";
 import { initializeMirrorQueue } from "@/lib/sync/mirrorQueue";
 
 // keep the native splash open until we've finished preparing JS state
@@ -27,6 +28,26 @@ function RootLayoutNav() {
 
   useEffect(() => {
     initializeMirrorQueue();
+
+    let unsubFirestore: (() => void) | undefined;
+    let active = true;
+
+    void initializeFirestoreOffline()
+      .then((unsub) => {
+        if (!active) {
+          unsub();
+          return;
+        }
+        unsubFirestore = unsub;
+      })
+      .catch((err) => {
+        console.warn("Firestore offline initialization failed", err);
+      });
+
+    return () => {
+      active = false;
+      unsubFirestore?.();
+    };
   }, []);
 
   useEffect(() => {

@@ -1,7 +1,8 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import type {
   User, DailyLog, MealEntry, WeeklyTarget,
-  WeekSchedule, WorkoutTemplate, WorkoutSession, BodyMeasurementEntry, ExerciseLibraryItem
+  WeekSchedule, WorkoutTemplate, WorkoutSession, BodyMeasurementEntry, ExerciseLibraryItem, ReminderState,
+  ReminderSettingsMirrorDoc,
 } from './types';
 import { cloudMirrorRepo } from "@/lib/repos/cloudMirrorRepo";
 import { measurementDocId, normalizeMeasurementEntry } from "@/lib/measurements/identity";
@@ -9,6 +10,7 @@ import {
   getMeasurementByDate,
   getMeasurementRange,
 } from "@/lib/measurements/localMeasurementsQuery";
+import { emitDataEvent } from "@/lib/dataEvents";
 
 const KEY = {
   users: '@6pac:users',
@@ -22,6 +24,7 @@ const KEY = {
   meals: (uid: string) => `@6pac:meals:${uid}`,
   sessions: (uid: string) => `@6pac:sessions:${uid}`,
   measurements: (uid: string) => `@6pac:measurements:${uid}`,
+  reminders: (uid: string) => `@6pac:reminders:${uid}`,
 };
 
 async function get<T>(key: string): Promise<T | null> {
@@ -40,6 +43,16 @@ function mirrorBestEffort(task: Promise<void>, label: string) {
   });
 }
 
+function toReminderSettingsDoc(state: ReminderState): ReminderSettingsMirrorDoc {
+  return {
+    id: "primary",
+    version: 1,
+    settings: state.settings,
+    createdAt: state.createdAt,
+    updatedAt: state.updatedAt,
+  };
+}
+
 export type LocalDataSnapshot = {
   logs: DailyLog[];
   meals: MealEntry[];
@@ -49,11 +62,12 @@ export type LocalDataSnapshot = {
   exercises: ExerciseLibraryItem[];
   sessions: WorkoutSession[];
   measurements: BodyMeasurementEntry[];
+  reminders: ReminderState | null;
 };
 
 export const localCacheRepo = {
   async getSnapshot(uid: string): Promise<LocalDataSnapshot> {
-    const [logs, meals, targets, schedules, templates, exercises, sessions, measurements] = await Promise.all([
+    const [logs, meals, targets, schedules, templates, exercises, sessions, measurements, reminders] = await Promise.all([
       get<DailyLog[]>(KEY.logs(uid)),
       get<MealEntry[]>(KEY.meals(uid)),
       get<WeeklyTarget[]>(KEY.targets(uid)),
@@ -62,6 +76,7 @@ export const localCacheRepo = {
       get<ExerciseLibraryItem[]>(KEY.exercises(uid)),
       get<WorkoutSession[]>(KEY.sessions(uid)),
       get<BodyMeasurementEntry[]>(KEY.measurements(uid)),
+      get<ReminderState>(KEY.reminders(uid)),
     ]);
 
     return {
@@ -73,6 +88,7 @@ export const localCacheRepo = {
       exercises: exercises || [],
       sessions: sessions || [],
       measurements: measurements || [],
+      reminders: reminders || null,
     };
   },
 
@@ -86,6 +102,7 @@ export const localCacheRepo = {
       set(KEY.exercises(uid), data.exercises),
       set(KEY.sessions(uid), data.sessions),
       set(KEY.measurements(uid), data.measurements),
+      set(KEY.reminders(uid), data.reminders),
     ]);
   },
 };
@@ -147,6 +164,7 @@ export const logsRepo = {
     if (idx >= 0) all[idx] = log;
     else all.push(log);
     await set(KEY.logs(uid), all);
+    emitDataEvent(uid, "logs");
     mirrorBestEffort(cloudMirrorRepo.upsertLog(uid, log), `logs/${log.date}`);
   },
 };
@@ -165,6 +183,7 @@ export const targetsRepo = {
     if (idx >= 0) all[idx] = target;
     else all.push(target);
     await set(KEY.targets(uid), all);
+    emitDataEvent(uid, "targets");
     mirrorBestEffort(cloudMirrorRepo.upsertTarget(uid, target), `targets/${target.weekStartDate}`);
   },
 };
@@ -183,6 +202,7 @@ export const schedulesRepo = {
     if (idx >= 0) all[idx] = schedule;
     else all.push(schedule);
     await set(KEY.schedules(uid), all);
+    emitDataEvent(uid, "schedules");
     mirrorBestEffort(cloudMirrorRepo.upsertSchedule(uid, schedule), `schedules/${schedule.weekStartDate}`);
   },
 };
@@ -201,11 +221,13 @@ export const workoutsRepo = {
     if (idx >= 0) all[idx] = template;
     else all.push(template);
     await set(KEY.templates(uid), all);
+    emitDataEvent(uid, "workouts");
     mirrorBestEffort(cloudMirrorRepo.upsertTemplate(uid, template), `templates/${template.id}`);
   },
   async delete(uid: string, id: string): Promise<void> {
     const all = await this.getAll(uid);
     await set(KEY.templates(uid), all.filter(t => t.id !== id));
+    emitDataEvent(uid, "workouts");
     mirrorBestEffort(cloudMirrorRepo.deleteTemplate(uid, id), `templates/${id}:delete`);
   },
 };
@@ -224,11 +246,13 @@ export const exercisesRepo = {
     if (idx >= 0) all[idx] = exercise;
     else all.push(exercise);
     await set(KEY.exercises(uid), all);
+    emitDataEvent(uid, "exercises");
     mirrorBestEffort(cloudMirrorRepo.upsertExercise(uid, exercise), `exercises/${exercise.id}`);
   },
   async delete(uid: string, id: string): Promise<void> {
     const all = await this.getAll(uid);
     await set(KEY.exercises(uid), all.filter((exercise) => exercise.id !== id));
+    emitDataEvent(uid, "exercises");
     mirrorBestEffort(cloudMirrorRepo.deleteExercise(uid, id), `exercises/${id}:delete`);
   },
 };
@@ -247,11 +271,13 @@ export const mealsRepo = {
     if (idx >= 0) all[idx] = meal;
     else all.push(meal);
     await set(KEY.meals(uid), all);
+    emitDataEvent(uid, "meals");
     mirrorBestEffort(cloudMirrorRepo.upsertMeal(uid, meal), `meals/${meal.id}`);
   },
   async delete(uid: string, id: string): Promise<void> {
     const all = await this.getAll(uid);
     await set(KEY.meals(uid), all.filter(m => m.id !== id));
+    emitDataEvent(uid, "meals");
     mirrorBestEffort(cloudMirrorRepo.deleteMeal(uid, id), `meals/${id}:delete`);
   },
 };
@@ -274,6 +300,7 @@ export const sessionsRepo = {
     if (idx >= 0) all[idx] = session;
     else all.push(session);
     await set(KEY.sessions(uid), all);
+    emitDataEvent(uid, "sessions");
     mirrorBestEffort(cloudMirrorRepo.upsertSession(uid, session), `sessions/${session.id}`);
   },
 };
@@ -303,6 +330,7 @@ export const measurementsRepo = {
     if (idx >= 0) all[idx] = normalized;
     else all.push(normalized);
     await set(KEY.measurements(uid), all);
+    emitDataEvent(uid, "measurements");
     mirrorBestEffort(cloudMirrorRepo.upsertMeasurement(uid, normalized), `measurements/${key}`);
   },
   async delete(uid: string, key: string): Promise<void> {
@@ -314,6 +342,26 @@ export const measurementsRepo = {
         return docId !== key && e.id !== key && e.date !== key;
       })
     );
+    emitDataEvent(uid, "measurements");
     mirrorBestEffort(cloudMirrorRepo.deleteMeasurement(uid, key), `measurements/${key}:delete`);
+  },
+};
+
+export const remindersRepo = {
+  async get(uid: string): Promise<ReminderState | null> {
+    return get<ReminderState>(KEY.reminders(uid));
+  },
+  async saveLocal(uid: string, state: ReminderState): Promise<void> {
+    await set(KEY.reminders(uid), state);
+    emitDataEvent(uid, "reminders");
+  },
+  async syncSettings(uid: string, state: ReminderState): Promise<void> {
+    mirrorBestEffort(
+      cloudMirrorRepo.upsertReminderSettings(uid, toReminderSettingsDoc(state)),
+      "reminders/primary:settings"
+    );
+  },
+  async save(uid: string, state: ReminderState): Promise<void> {
+    await this.saveLocal(uid, state);
   },
 };

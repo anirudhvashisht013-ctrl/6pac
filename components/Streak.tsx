@@ -1,13 +1,12 @@
 import React, { useMemo } from "react";
 import { View, Text, ScrollView, StyleSheet, Pressable, Alert } from "react-native";
-import { Ionicons } from "@expo/vector-icons";
+import { MaterialCommunityIcons } from "@expo/vector-icons";
 import { C } from "@/constants/colors";
 import { S } from "@/constants/spacing";
-import { formatDateLong } from "@/lib/dates";
+import { formatDateLong, todayYMD, addDays, toYMD } from "@/lib/dates";
 import type { ISODate } from "@/lib/models";
 import type { DayWWSS } from "@/lib/streak";
 import { computeCurrentStreak } from "@/lib/streak";
-import { todayYMD, addDays, toYMD } from "@/lib/dates";
 
 import type { DailyLog } from "@/lib/types";
 
@@ -29,6 +28,13 @@ export function Streak({ data, today: todayProp, todayLog }: StreakProps) {
   const streakCount = useMemo(() => {
     return computeCurrentStreak(data, new Date());
   }, [data]);
+
+  const message = useMemo(() => {
+    if (streakCount === 0) return "Start your streak today!";
+    if (streakCount < 3) return "Good start - keep the streak going!";
+    if (streakCount < 7) return "Nice work! Stay consistent.";
+    return "Amazing streak! Keep it alive.";
+  }, [streakCount]);
 
   const handlePress = (day: DayWWSS) => {
     const parts: string[] = [];
@@ -115,8 +121,8 @@ export function Streak({ data, today: todayProp, todayLog }: StreakProps) {
             style={({ pressed }) => [styles.iconWrapper, pressed && { opacity: 0.6 }]}
             hitSlop={8}
           >
-            <Ionicons
-              name="flame" 
+            <MaterialCommunityIcons
+              name="arm-flex"
               size={24}
               color={todayColor.color}
               style={{ opacity: todayColor.opacity }}
@@ -126,13 +132,6 @@ export function Streak({ data, today: todayProp, todayLog }: StreakProps) {
       </View>
     );
   }
-
-  const message = useMemo(() => {
-    if (streakCount === 0) return "Start your streak today!";
-    if (streakCount < 3) return "Good start – keep the flame going!";
-    if (streakCount < 7) return "Nice work! Stay consistent.";
-    return "Amazing streak! Don't break it 💪";
-  }, [streakCount]);
 
   return (
     <View style={styles.container}>
@@ -153,8 +152,8 @@ export function Streak({ data, today: todayProp, todayLog }: StreakProps) {
             style={({ pressed }) => [styles.iconWrapper, pressed && { opacity: 0.6 }]}
             hitSlop={8}
           >
-            <Ionicons
-              name="flame" 
+            <MaterialCommunityIcons
+              name="arm-flex"
               size={24}
               color={getFireColor(d).color}
               style={{ opacity: getFireColor(d).opacity }}

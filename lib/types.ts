@@ -152,3 +152,63 @@ export interface BodyMeasurementEntry {
 
 export type GoalType = 'lean' | 'recomp' | 'buffed';
 export type WeightGoalType = 'lose' | 'gain' | 'maintain';
+
+export type ReminderType = 'measurements' | 'weeklyPlan' | 'workout' | 'dailyLogging';
+
+export type ReminderSettings = {
+  enabled: boolean;
+  measurement: {
+    enabled: boolean;
+    time: string; // HH:mm local
+  };
+  weeklyPlan: {
+    enabled: boolean;
+    time: string; // HH:mm local (Sunday)
+  };
+  workout: {
+    enabled: boolean;
+    time: string; // HH:mm local
+    leadMinutes: number;
+  };
+  dailyLogging: {
+    enabled: boolean;
+    time: string; // HH:mm local
+    sendOsNotification: boolean;
+  };
+  quietHours: {
+    enabled: boolean;
+    start: string; // HH:mm local
+    end: string; // HH:mm local
+  };
+  maxNotificationsPerDay: number;
+};
+
+export type ReminderRuntime = {
+  timezone?: string;
+  permissionStatus?: 'granted' | 'denied' | 'undetermined' | 'unknown';
+  lastPermissionPromptAt?: string | null;
+  lastMeasurementCompletedAt?: string | null;
+  lastWeeklyPlanCompletedWeek?: string | null;
+  lastWorkoutCompletedAt?: string | null;
+  lastDailyLoggingCompletedDate?: string | null;
+  snoozedUntil?: Record<string, string>;
+  dismissedCycles?: Record<string, string>;
+  updatedAt?: string;
+};
+
+export type ReminderState = {
+  id: 'primary';
+  version: 1;
+  settings: ReminderSettings;
+  runtime: ReminderRuntime;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type ReminderSettingsMirrorDoc = {
+  id: "primary";
+  version: 1;
+  settings: ReminderSettings;
+  createdAt: string;
+  updatedAt: string;
+};

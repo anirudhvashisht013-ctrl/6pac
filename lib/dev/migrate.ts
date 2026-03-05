@@ -13,6 +13,7 @@ export type MigrationResult = {
   targetsMigrated: number;
   schedulesMigrated: number;
   measurementsMigrated: number;
+  remindersMigrated: number;
   total: number;
   status: "success" | "partial" | "error";
   error?: string;
@@ -48,6 +49,7 @@ export async function migrateAllDataToCloud(uid: string): Promise<MigrationResul
     targetsMigrated: 0,
     schedulesMigrated: 0,
     measurementsMigrated: 0,
+    remindersMigrated: 0,
     total: 0,
     status: "success",
   };
@@ -137,6 +139,22 @@ export async function migrateAllDataToCloud(uid: string): Promise<MigrationResul
       }
     }
 
+    if (snapshot.reminders) {
+      try {
+        await cloudMirrorRepo.upsertReminderSettings(uid, {
+          id: "primary",
+          version: 1,
+          settings: snapshot.reminders.settings,
+          createdAt: snapshot.reminders.createdAt,
+          updatedAt: snapshot.reminders.updatedAt,
+        });
+        result.remindersMigrated += 1;
+      } catch (e) {
+        failures += 1;
+        console.error("Failed to migrate reminder settings:", e);
+      }
+    }
+
     result.total =
       result.logsMigrated +
       result.mealsMigrated +
@@ -145,7 +163,8 @@ export async function migrateAllDataToCloud(uid: string): Promise<MigrationResul
       result.exercisesMigrated +
       result.targetsMigrated +
       result.schedulesMigrated +
-      result.measurementsMigrated;
+      result.measurementsMigrated +
+      result.remindersMigrated;
 
     if (failures > 0) {
       result.status = "partial";

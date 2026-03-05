@@ -1,9 +1,9 @@
-import React, { useState, useCallback, useEffect, useMemo } from 'react';
+import React, { useState, useCallback, useEffect, useMemo, useRef } from 'react';
 import {
   View, Text, ScrollView, StyleSheet, Pressable,
   TextInput, ActivityIndicator, Modal, Platform,
 } from 'react-native';
-import { useFocusEffect, router } from 'expo-router';
+import { useFocusEffect } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
 import * as Haptics from 'expo-haptics';
@@ -53,7 +53,7 @@ type WeekSummary = {
 type DayStatus = 'planned_workout' | 'rest' | 'unplanned';
 
 function DayCard({
-  day, template, log, meals, target, sessions, onPress, isWeekReady,
+  day, template, log, meals, target, sessions, onPress,
 }: {
   day: PlannedDay;
   template: WorkoutTemplate | null;
@@ -62,7 +62,6 @@ function DayCard({
   target: WeeklyTarget | null;
   sessions: WorkoutSession[];
   onPress: () => void;
-  isWeekReady: boolean;
 }) {
   const today = todayYMD();
   const isToday = day.date === today;
@@ -82,6 +81,11 @@ function DayCard({
   const waterHasData = !!log?.waterMl;
 
   const sessionCompleted = sessions.some(s => s.date === day.date && s.completed);
+  const missedWorkout =
+    day.status === 'planned_workout' &&
+    !future &&
+    !isToday &&
+    !sessionCompleted;
 
   const dayName = dayLabel(day.date);
   const dateStr = formatDate(day.date);
@@ -132,22 +136,25 @@ function DayCard({
       {!future && target && (
         <View style={styles.indicatorsRow}>
           {[
-            { label: 'C', met: calMet, hasData: calHasData },
-            { label: 'S', met: stepsMet, hasData: stepsHasData },
-            { label: 'W', met: waterMet, hasData: waterHasData },
-          ].map(({ label, met, hasData }) => (
-            <View key={label} style={[
+            { key: 'calories', icon: 'flame-outline', met: calMet, hasData: calHasData },
+            { key: 'steps', icon: 'footsteps-outline', met: stepsMet, hasData: stepsHasData },
+            { key: 'water', icon: 'pint-outline', met: waterMet, hasData: waterHasData },
+          ].map(({ key, icon, met, hasData }) => (
+            <View key={key} style={[
               styles.indicator,
               met ? styles.indicatorMet : hasData ? styles.indicatorLogged : styles.indicatorEmpty,
             ]}>
-              <Text style={[
-                styles.indicatorText,
-                met ? styles.indicatorTextMet : hasData ? styles.indicatorTextLogged : styles.indicatorTextEmpty,
-              ]}>{label}</Text>
+              <Ionicons
+                name={icon as any}
+                size={14}
+                color={met ? C.success : hasData ? C.textSecondary : C.textMuted}
+              />
             </View>
           ))}
         </View>
       )}
+
+      {missedWorkout ? <Text style={styles.missedWorkoutText}>Missed workout</Text> : null}
     </Pressable>
   );
 }
@@ -157,6 +164,7 @@ export default function WeekScreen() {
   const { user } = useAuth();
   const today = todayYMD();
   const currentWeekStart = getMondayYMD(today);
+  const latestPlanningWeekStart = toYMD(addDays(new Date(`${currentWeekStart}T00:00:00`), 7 * 5));
 
   const [weekStart, setWeekStart] = useState<ISODate>(currentWeekStart);
   const [templates, setTemplates] = useState<WorkoutTemplate[]>([]);
@@ -167,7 +175,11 @@ export default function WeekScreen() {
   const [allSessions, setAllSessions] = useState<WorkoutSession[]>([]);
   const [loading, setLoading] = useState(true);
   const [editingTarget, setEditingTarget] = useState(false);
-  const [hoverWeekStart, setHoverWeekStart] = useState<ISODate | null>(null);
+  const [tooltipWeekStart, setTooltipWeekStart] = useState<ISODate | null>(null);
+  const [tooltipAnchor, setTooltipAnchor] = useState<{ x: number; y: number; w: number; h: number } | null>(null);
+  const [weekWrapSize, setWeekWrapSize] = useState({ width: 0, height: 0 });
+  const weekWrapRef = useRef<View | null>(null);
+  const weekChipRefs = useRef<Record<string, View | null>>({});
   const [targetForm, setTargetForm] = useState<EditingTarget>({
     dailyCaloriesTarget: '2400',
     dailyStepsTarget: '8000',
@@ -218,12 +230,13 @@ export default function WeekScreen() {
     allTargets.forEach((tgt) => includeWeek(tgt.weekStartDate as ISODate));
     allSchedules.forEach((sched) => includeWeek(sched.weekStartDate as ISODate));
     includeWeek(currentWeekStart);
+    includeWeek(latestPlanningWeekStart);
 
     return {
       firstDataWeekStart: first || currentWeekStart,
       latestDataWeekStart: latest || currentWeekStart,
     };
-  }, [allLogs, allMeals, allSessions, allTargets, allSchedules, currentWeekStart]);
+  }, [allLogs, allMeals, allSessions, allTargets, allSchedules, currentWeekStart, latestPlanningWeekStart]);
 
   const firstDataWeekStart = bounds.firstDataWeekStart;
   const latestDataWeekStart = bounds.latestDataWeekStart;
@@ -239,7 +252,7 @@ export default function WeekScreen() {
   }, [weekStart, firstDataWeekStart, latestDataWeekStart]);
 
   const weekTabs = useMemo(
-    () => listWeekStarts(firstDataWeekStart, latestDataWeekStart).reverse(),
+    () => listWeekStarts(firstDataWeekStart, latestDataWeekStart),
     [firstDataWeekStart, latestDataWeekStart]
   );
 
@@ -331,11 +344,30 @@ export default function WeekScreen() {
   }, [allLogs, allMeals, allSessions, allTargets, weekTabs]);
 
   const activeWeekSummary = weekSummaries.get(weekStart) || null;
-  const tooltipWeekStart = hoverWeekStart || weekStart;
-  const tooltipSummary = weekSummaries.get(tooltipWeekStart) || null;
+  const tooltipSummary = tooltipWeekStart ? weekSummaries.get(tooltipWeekStart) || null : null;
+  const isCompletedWeek = useCallback(
+    (ws: ISODate) => ws < currentWeekStart,
+    [currentWeekStart]
+  );
+
+  const positionTooltipForWeek = useCallback((ws: ISODate) => {
+    const wrap = weekWrapRef.current as any;
+    const chip = weekChipRefs.current[ws] as any;
+    if (!wrap || !chip || typeof chip.measureLayout !== 'function') return;
+
+    chip.measureLayout(
+      wrap,
+      (x: number, y: number, w: number, h: number) => {
+        setTooltipAnchor({ x, y, w, h });
+      },
+      () => {
+        // no-op
+      }
+    );
+  }, []);
   const selectedTabIndex = weekTabs.indexOf(weekStart);
-  const canGoNewer = selectedTabIndex > 0;
-  const canGoOlder = selectedTabIndex >= 0 && selectedTabIndex < weekTabs.length - 1;
+  const canGoPrevious = selectedTabIndex > 0;
+  const canGoNext = selectedTabIndex >= 0 && selectedTabIndex < weekTabs.length - 1;
   const isWeekReady = schedule.days.every((d) => d.status !== 'unplanned');
 
   const saveTarget = async () => {
@@ -389,13 +421,13 @@ export default function WeekScreen() {
     })(),
   };
 
-  const goToNewerWeek = () => {
-    if (!canGoNewer) return;
+  const goToPreviousWeek = () => {
+    if (!canGoPrevious) return;
     setWeekStart(weekTabs[selectedTabIndex - 1]);
   };
 
-  const goToOlderWeek = () => {
-    if (!canGoOlder) return;
+  const goToNextWeek = () => {
+    if (!canGoNext) return;
     setWeekStart(weekTabs[selectedTabIndex + 1]);
   };
 
@@ -427,13 +459,13 @@ export default function WeekScreen() {
             <Pressable
               style={({ pressed }) => [
                 styles.weekArrowBtn,
-                !canGoNewer && styles.weekArrowBtnDisabled,
+                !canGoPrevious && styles.weekArrowBtnDisabled,
                 pressed && { opacity: 0.85 },
               ]}
-              onPress={goToNewerWeek}
-              disabled={!canGoNewer}
+              onPress={goToPreviousWeek}
+              disabled={!canGoPrevious}
             >
-              <Ionicons name="chevron-back" size={16} color={canGoNewer ? C.textSecondary : C.textMuted} />
+              <Ionicons name="chevron-back" size={16} color={canGoPrevious ? C.textSecondary : C.textMuted} />
             </Pressable>
             <Pressable
               style={({ pressed }) => [
@@ -449,84 +481,126 @@ export default function WeekScreen() {
             <Pressable
               style={({ pressed }) => [
                 styles.weekArrowBtn,
-                !canGoOlder && styles.weekArrowBtnDisabled,
+                !canGoNext && styles.weekArrowBtnDisabled,
                 pressed && { opacity: 0.85 },
               ]}
-              onPress={goToOlderWeek}
-              disabled={!canGoOlder}
+              onPress={goToNextWeek}
+              disabled={!canGoNext}
             >
-              <Ionicons name="chevron-forward" size={16} color={canGoOlder ? C.textSecondary : C.textMuted} />
+              <Ionicons name="chevron-forward" size={16} color={canGoNext ? C.textSecondary : C.textMuted} />
             </Pressable>
           </View>
         </View>
 
-        <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.weekSelector}>
-          {weekTabs.map((ws) => {
-            const isCurrent = ws === weekStart;
-            const isThisWeek = ws === currentWeekStart;
-            return (
-              <Pressable
-                key={ws}
-                style={[styles.weekSlot, isCurrent && styles.weekSlotActive]}
-                onPress={() => setWeekStart(ws)}
-                onHoverIn={Platform.OS === 'web' ? () => setHoverWeekStart(ws) : undefined}
-                onHoverOut={Platform.OS === 'web' ? () => setHoverWeekStart((prev) => (prev === ws ? null : prev)) : undefined}
-              >
-                <Text style={[styles.weekSlotMonth, isCurrent && styles.weekSlotTextActive]}>
-                  {monthYearLabel(ws)}
-                </Text>
-                <Text style={[styles.weekSlotNum, isCurrent && styles.weekSlotTextActive]}>
-                  W{getWeekNumber(ws)}
-                </Text>
-                {isThisWeek && <View style={styles.currentDot} />}
-              </Pressable>
-            );
-          })}
-        </ScrollView>
+        <View
+          ref={weekWrapRef}
+          style={styles.weekSelectorWrap}
+          onLayout={(e) => {
+            const { width, height } = e.nativeEvent.layout;
+            setWeekWrapSize({ width, height });
+          }}
+        >
+          <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.weekSelector}>
+            {weekTabs.map((ws) => {
+              const isCurrent = ws === weekStart;
+              const isThisWeek = ws === currentWeekStart;
+              const canShowTooltip = isCompletedWeek(ws);
+              return (
+                <View
+                  key={ws}
+                  ref={(node) => {
+                    weekChipRefs.current[ws] = node;
+                  }}
+                  collapsable={false}
+                >
+                  <Pressable
+                    style={[styles.weekSlot, isCurrent && styles.weekSlotActive]}
+                    onPress={() => {
+                      setWeekStart(ws);
+                      if (Platform.OS !== 'web') {
+                        setTooltipWeekStart((prev) => {
+                          if (!canShowTooltip) return null;
+                          const next = prev === ws ? null : ws;
+                          if (next) {
+                            setTimeout(() => positionTooltipForWeek(ws), 0);
+                          }
+                          return next;
+                        });
+                      }
+                    }}
+                    onHoverIn={
+                      Platform.OS === 'web'
+                        ? () => {
+                            if (!canShowTooltip) {
+                              setTooltipWeekStart(null);
+                              return;
+                            }
+                            setTooltipWeekStart(ws);
+                            setTimeout(() => positionTooltipForWeek(ws), 0);
+                          }
+                        : undefined
+                    }
+                    onHoverOut={
+                      Platform.OS === 'web'
+                        ? () => setTooltipWeekStart((prev) => (prev === ws ? null : prev))
+                        : undefined
+                    }
+                  >
+                    <Text style={[styles.weekSlotMonth, isCurrent && styles.weekSlotTextActive]}>
+                      {monthYearLabel(ws)}
+                    </Text>
+                    <Text style={[styles.weekSlotNum, isCurrent && styles.weekSlotTextActive]}>
+                      W{getWeekNumber(ws)}
+                    </Text>
+                    {isThisWeek && <View style={styles.currentDot} />}
+                  </Pressable>
+                </View>
+              );
+            })}
+          </ScrollView>
 
-        {tooltipSummary && (
-          <View style={styles.weekTooltipCard}>
-            <Text style={styles.weekTooltipTitle}>
-              {monthYearLabel(tooltipWeekStart)} • W{getWeekNumber(tooltipWeekStart)}
-            </Text>
-            <View style={styles.weekTooltipGrid}>
-              <View style={styles.weekTooltipItem}>
-                <Text style={styles.weekTooltipLabel}>Weight</Text>
-                <Text style={styles.weekTooltipValue}>
-                  {formatMetricWithTarget(tooltipSummary.avgWeightKg, tooltipSummary.targetWeightKg, 1)} kg
-                </Text>
-              </View>
-              <View style={styles.weekTooltipItem}>
-                <Text style={styles.weekTooltipLabel}>Calories</Text>
-                <Text style={styles.weekTooltipValue}>
-                  {formatMetricWithTarget(tooltipSummary.avgCalories, tooltipSummary.targetCalories)} kcal
-                </Text>
-              </View>
-              <View style={styles.weekTooltipItem}>
-                <Text style={styles.weekTooltipLabel}>Sleep</Text>
-                <Text style={styles.weekTooltipValue}>{formatMetric(tooltipSummary.avgSleepHours, 1)} h</Text>
-              </View>
-              <View style={styles.weekTooltipItem}>
-                <Text style={styles.weekTooltipLabel}>Steps</Text>
-                <Text style={styles.weekTooltipValue}>
-                  {formatMetricWithTarget(tooltipSummary.avgSteps, tooltipSummary.targetSteps)}
-                </Text>
-              </View>
-              <View style={styles.weekTooltipItem}>
-                <Text style={styles.weekTooltipLabel}>Water</Text>
-                <Text style={styles.weekTooltipValue}>
-                  {formatMetricWithTarget(tooltipSummary.avgWaterMl, tooltipSummary.targetWaterMl)} ml
-                </Text>
-              </View>
-              <View style={styles.weekTooltipItem}>
-                <Text style={styles.weekTooltipLabel}>Workouts</Text>
-                <Text style={styles.weekTooltipValue}>
-                  {tooltipSummary.workoutsCompleted}/{WORKOUTS_PER_WEEK_TARGET}
-                </Text>
-              </View>
+          {tooltipSummary && tooltipWeekStart && isCompletedWeek(tooltipWeekStart) && tooltipAnchor ? (
+            <View
+              pointerEvents="none"
+              style={[
+                styles.weekTooltipBubble,
+                (() => {
+                  const TOOLTIP_WIDTH = 300;
+                  const TOOLTIP_HEIGHT = 34;
+                  const SPACING = 8;
+                  const EDGE = 6;
+
+                  const rightLeft = tooltipAnchor.x + tooltipAnchor.w + SPACING;
+                  const rightFits = rightLeft + TOOLTIP_WIDTH <= weekWrapSize.width - EDGE;
+
+                  if (rightFits) {
+                    const yCentered = tooltipAnchor.y + tooltipAnchor.h / 2 - TOOLTIP_HEIGHT / 2;
+                    const top = Math.max(0, Math.min(yCentered, Math.max(0, weekWrapSize.height - TOOLTIP_HEIGHT)));
+                    return {
+                      width: TOOLTIP_WIDTH,
+                      left: rightLeft,
+                      top,
+                    };
+                  }
+
+                  const centered = tooltipAnchor.x + tooltipAnchor.w / 2 - TOOLTIP_WIDTH / 2;
+                  const left = Math.max(EDGE, Math.min(centered, Math.max(EDGE, weekWrapSize.width - TOOLTIP_WIDTH - EDGE)));
+                  const top = Math.max(0, tooltipAnchor.y - TOOLTIP_HEIGHT - SPACING);
+
+                  return {
+                    width: TOOLTIP_WIDTH,
+                    left,
+                    top,
+                  };
+                })(),
+              ]}
+            >
+              <Text style={styles.weekTooltipBubbleText}>
+                {`W${getWeekNumber(tooltipWeekStart!)} • ${formatMetricWithTarget(tooltipSummary.avgCalories, tooltipSummary.targetCalories)} kcal • ${formatMetricWithTarget(tooltipSummary.avgSteps, tooltipSummary.targetSteps)} steps • ${formatMetric(tooltipSummary.avgSleepHours, 1)}h`}
+              </Text>
             </View>
-          </View>
-        )}
+          ) : null}
+        </View>
 
         {!isWeekReady && (
           <View style={styles.warningBanner}>
@@ -627,7 +701,6 @@ export default function WeekScreen() {
               target={target}
               sessions={getSessionsForDate(day.date)}
               onPress={() => handleDayPress(day, idx)}
-              isWeekReady={isWeekReady}
             />
           ))
         )}
@@ -814,7 +887,8 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   weekArrowBtnDisabled: { opacity: 0.45 },
-  weekSelector: { marginHorizontal: -20, paddingHorizontal: 20, marginBottom: 16 },
+  weekSelectorWrap: { position: 'relative', marginBottom: 16 },
+  weekSelector: { marginHorizontal: -20, paddingHorizontal: 20 },
   weekSlot: {
     paddingHorizontal: 14, paddingVertical: 10, marginRight: 8,
     backgroundColor: C.surface2, borderRadius: 12, borderWidth: 1, borderColor: C.border,
@@ -827,20 +901,20 @@ const styles = StyleSheet.create({
   currentDot: {
     width: 5, height: 5, borderRadius: 3, backgroundColor: C.primary, marginTop: 4,
   },
-  weekTooltipCard: {
-    backgroundColor: C.surface2,
-    borderRadius: 12,
+  weekTooltipBubble: {
+    position: 'absolute',
+    backgroundColor: C.surface,
+    borderRadius: 8,
     borderWidth: 1,
-    borderColor: C.border,
-    padding: 12,
-    gap: 10,
-    marginBottom: 16,
+    borderColor: C.borderLight,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
   },
-  weekTooltipTitle: { fontFamily: 'Outfit_600SemiBold', fontSize: 13, color: C.textSecondary },
-  weekTooltipGrid: { flexDirection: 'row', flexWrap: 'wrap', rowGap: 10, columnGap: 8 },
-  weekTooltipItem: { minWidth: '30%', flex: 1 },
-  weekTooltipLabel: { fontFamily: 'Outfit_400Regular', fontSize: 11, color: C.textMuted },
-  weekTooltipValue: { fontFamily: 'Outfit_600SemiBold', fontSize: 13, color: C.text, marginTop: 1 },
+  weekTooltipBubbleText: {
+    fontFamily: 'Outfit_500Medium',
+    fontSize: 11,
+    color: C.textSecondary,
+  },
   warningBanner: {
     flexDirection: 'row', alignItems: 'center', gap: 8,
     backgroundColor: C.warningBg, borderRadius: 10, padding: 12, marginBottom: 16,
@@ -929,10 +1003,7 @@ const styles = StyleSheet.create({
   indicatorMet: { backgroundColor: C.successBg, borderColor: C.success },
   indicatorLogged: { backgroundColor: C.surface3, borderColor: C.borderLight },
   indicatorEmpty: { backgroundColor: C.surface3, borderColor: C.border, opacity: 0.5 },
-  indicatorText: { fontFamily: 'Outfit_700Bold', fontSize: 10 },
-  indicatorTextMet: { color: C.success },
-  indicatorTextLogged: { color: C.textSecondary },
-  indicatorTextEmpty: { color: C.textMuted },
+  missedWorkoutText: { fontFamily: 'Outfit_600SemiBold', fontSize: 12, color: C.error, marginTop: 2 },
   statsGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginBottom: 20 },
   statCard: {
     minWidth: '45%', flex: 1, backgroundColor: C.surface2, borderRadius: 12,

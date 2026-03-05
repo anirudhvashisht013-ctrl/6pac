@@ -9,6 +9,7 @@ import type {
   DailyLog,
   ExerciseLibraryItem,
   MealEntry,
+  ReminderSettingsMirrorDoc,
   WeekSchedule,
   WeeklyTarget,
   WorkoutSession,
@@ -102,6 +103,10 @@ export const cloudMirrorRepo = {
 
   async deleteMeasurement(uid: string, entryId: string): Promise<void> {
     await removeWithTombstoneQueue(uid, "measurements_local_v1", entryId);
+  },
+
+  async upsertReminderSettings(uid: string, doc: ReminderSettingsMirrorDoc): Promise<void> {
+    await upsertWithQueue(uid, "reminders_v1", "primary", doc as unknown as Record<string, unknown>);
   },
 
   async clearCollection(uid: string, collectionName: string): Promise<void> {

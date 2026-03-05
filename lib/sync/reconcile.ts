@@ -6,11 +6,14 @@ import {
   type LocalDataSnapshot,
 } from "@/lib/storage";
 import { measurementDocId, normalizeMeasurementEntry } from "@/lib/measurements/identity";
+import { mergeReminderStateDefaults } from "@/lib/reminders/defaults";
 import type {
   BodyMeasurementEntry,
   DailyLog,
   ExerciseLibraryItem,
   MealEntry,
+  ReminderSettingsMirrorDoc,
+  ReminderState,
   WeekSchedule,
   WeeklyTarget,
   WorkoutSession,
@@ -36,6 +39,7 @@ type MirrorCollectionName =
   | "exercises_v1"
   | "sessions_v1"
   | "measurements_local_v1"
+  | "reminders_v1"
   | "tombstones_v1";
 type FetchResult<T> = {
   items: T[];
@@ -226,6 +230,47 @@ function measurementKey(entry: BodyMeasurementEntry): string {
   return key;
 }
 
+function toReminderSettingsDoc(state: ReminderState): ReminderSettingsMirrorDoc {
+  return {
+    id: "primary",
+    version: 1,
+    settings: state.settings,
+    createdAt: state.createdAt,
+    updatedAt: state.updatedAt,
+  };
+}
+
+function mergeReminderState(
+  localState: ReminderState | null,
+  reminderDoc: ReminderSettingsMirrorDoc | null
+): ReminderState | null {
+  const normalizedLocal = localState ? mergeReminderStateDefaults(localState) : null;
+  if (!normalizedLocal && !reminderDoc) return null;
+  if (!reminderDoc) return normalizedLocal;
+
+  const nowIso = new Date().toISOString();
+  const base = normalizedLocal
+    ? normalizedLocal
+    : mergeReminderStateDefaults({
+        id: "primary",
+        version: 1,
+        settings: reminderDoc.settings,
+        runtime: {},
+        createdAt: reminderDoc.createdAt || nowIso,
+        updatedAt: reminderDoc.updatedAt || nowIso,
+      });
+
+  return mergeReminderStateDefaults({
+    ...base,
+    id: "primary",
+    version: 1,
+    settings: reminderDoc.settings,
+    createdAt: base.createdAt || reminderDoc.createdAt || nowIso,
+    // Keep settings-level timestamp from cloud/local doc; runtime timestamp stays nested.
+    updatedAt: reminderDoc.updatedAt || base.updatedAt,
+  });
+}
+
 export async function reconcileCloudToLocal(
   uid: string,
   opts?: { force?: boolean }
@@ -246,6 +291,7 @@ export async function reconcileCloudToLocal(
     exercisesRes,
     sessionsRes,
     measurementsRes,
+    remindersRes,
     tombstonesRes,
   ] = await Promise.all([
     fetchMirrorCollection<DailyLog>(uid, "logs_v1", force ? undefined : cursors.logs_v1),
@@ -256,6 +302,7 @@ export async function reconcileCloudToLocal(
     fetchMirrorCollection<ExerciseLibraryItem>(uid, "exercises_v1", force ? undefined : cursors.exercises_v1),
     fetchMirrorCollection<WorkoutSession>(uid, "sessions_v1", force ? undefined : cursors.sessions_v1),
     fetchMirrorCollection<BodyMeasurementEntry>(uid, "measurements_local_v1", force ? undefined : cursors.measurements_local_v1),
+    fetchMirrorCollection<ReminderSettingsMirrorDoc>(uid, "reminders_v1", force ? undefined : cursors.reminders_v1),
     fetchTombstones(uid, force ? undefined : cursors.tombstones_v1),
   ]);
   const cloudLogs = logsRes.items;
@@ -271,6 +318,8 @@ export async function reconcileCloudToLocal(
   const localMeasurements = local.measurements
     .map(normalizeMeasurementEntry)
     .filter(hasMeasurementKey);
+  const localReminderDocs = local.reminders ? [toReminderSettingsDoc(local.reminders)] : [];
+  const cloudReminders = remindersRes.items;
   const tombstones = tombstonesRes.items;
 
   const tombstonesByKey = new Map<string, number>();
@@ -283,6 +332,21 @@ export async function reconcileCloudToLocal(
     if (existing == null || ts > existing) tombstonesByKey.set(key, ts);
   }
 
+  const mergedReminderDocsBeforeDelete = mergeByKey(
+    localReminderDocs,
+    cloudReminders,
+    () => "primary",
+    ["updatedAt", "createdAt"]
+  );
+
+  const mergedReminderDoc = applyTombstones(
+    "reminders_v1",
+    mergedReminderDocsBeforeDelete,
+    () => "primary",
+    tombstonesByKey,
+    ["updatedAt", "createdAt"]
+  )[0] || null;
+
   const mergedBeforeDelete: LocalDataSnapshot = {
     logs: mergeByKey(local.logs as any[], cloudLogs as any[], (x) => String(x.date), ["updatedAt"]),
     meals: mergeByKey(local.meals as any[], cloudMeals as any[], (x) => String(x.id), ["updatedAt", "createdAt"]),
@@ -292,6 +356,7 @@ export async function reconcileCloudToLocal(
     exercises: mergeByKey(local.exercises as any[], cloudExercises as any[], (x) => String(x.id), ["updatedAt", "createdAt"]),
     sessions: mergeByKey(local.sessions as any[], cloudSessions as any[], (x) => String(x.id), ["endedAt", "startedAt"]),
     measurements: mergeByKey(localMeasurements, cloudMeasurements, measurementKey, ["updatedAt", "createdAt", "loggedAt"]),
+    reminders: mergeReminderState(local.reminders, mergedReminderDocsBeforeDelete[0] || null),
   };
 
   const merged: LocalDataSnapshot = {
@@ -303,6 +368,7 @@ export async function reconcileCloudToLocal(
     exercises: applyTombstones("exercises_v1", mergedBeforeDelete.exercises, (x) => String((x as any).id), tombstonesByKey, ["updatedAt", "createdAt"]),
     sessions: applyTombstones("sessions_v1", mergedBeforeDelete.sessions, (x) => String((x as any).id), tombstonesByKey, ["endedAt", "startedAt"]),
     measurements: applyTombstones("measurements_local_v1", mergedBeforeDelete.measurements, measurementKey, tombstonesByKey, ["updatedAt", "createdAt", "loggedAt"]),
+    reminders: mergedReminderDoc ? mergeReminderState(mergedBeforeDelete.reminders, mergedReminderDoc) : null,
   };
 
   await localCacheRepo.setSnapshot(uid, merged);
@@ -318,6 +384,7 @@ export async function reconcileCloudToLocal(
       exercises: merged.exercises.length,
       sessions: merged.sessions.length,
       measurements: merged.measurements.length,
+      reminders: merged.reminders ? 1 : 0,
     },
     collectionCursors: {
       logs_v1: logsRes.cursor,
@@ -328,6 +395,7 @@ export async function reconcileCloudToLocal(
       exercises_v1: exercisesRes.cursor,
       sessions_v1: sessionsRes.cursor,
       measurements_local_v1: measurementsRes.cursor,
+      reminders_v1: remindersRes.cursor,
       tombstones_v1: tombstonesRes.cursor,
     },
   });

@@ -6,11 +6,13 @@ import { Ionicons, MaterialCommunityIcons } from "@expo/vector-icons";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { C } from "@/constants/colors";
 import SyncStatusIndicator from "@/components/SyncStatusIndicator";
+import { useReminders } from "@/context/ReminderContext";
 
 function ClassicTabLayout() {
   const safeAreaInsets = useSafeAreaInsets();
   const isIOS = Platform.OS === "ios";
   const isWeb = Platform.OS === "web";
+  const { tabCounts } = useReminders();
 
   const TabIcon = ({ name, focused }: { name: string; focused: boolean; color: string; size: number }) => {
     const color = focused ? C.primary : C.tabInactive;
@@ -25,10 +27,13 @@ function ClassicTabLayout() {
 
     const [lib, icon] = icons[name] || ["Ionicons", "ellipse"];
 
-    if (lib === "MaterialCommunityIcons") {
-      return <MaterialCommunityIcons name={icon as any} size={24} color={color} />;
-    }
-    return <Ionicons name={icon as any} size={24} color={color} />;
+    const iconNode =
+      lib === "MaterialCommunityIcons" ? (
+        <MaterialCommunityIcons name={icon as any} size={24} color={color} />
+      ) : (
+        <Ionicons name={icon as any} size={24} color={color} />
+      );
+    return iconNode;
   };
 
   const makeTabIcon = (name: string) => {
@@ -37,6 +42,28 @@ function ClassicTabLayout() {
     }
     TabBarIcon.displayName = `${name}TabBarIcon`;
     return TabBarIcon;
+  };
+
+  const badgeValue = (name: string) => {
+    const count = tabCounts[name as keyof typeof tabCounts] || 0;
+    if (!count) return undefined;
+    return String(Math.min(count, 9));
+  };
+
+  const badgeStyle = (name: string) => {
+    void name;
+    return {
+      backgroundColor: C.error,
+      color: C.bg,
+      fontFamily: "Outfit_700Bold" as const,
+      fontSize: 10,
+      minWidth: 16,
+      height: 16,
+      lineHeight: 16,
+      borderRadius: 99,
+      paddingHorizontal: 4,
+      paddingVertical: 0,
+    };
   };
 
   return (
@@ -66,13 +93,53 @@ function ClassicTabLayout() {
           ) : null,
       }}
     >
-      <Tabs.Screen name="index" options={{ title: "Today", tabBarIcon: makeTabIcon("index") }} />
-      <Tabs.Screen name="week" options={{ title: "Weekly Plan", tabBarIcon: makeTabIcon("week") }} />
-      <Tabs.Screen name="workouts" options={{ title: "Workouts", tabBarIcon: makeTabIcon("workouts") }} />
-      <Tabs.Screen name="nutrition" options={{ title: "Nutrition", tabBarIcon: makeTabIcon("nutrition") }} />
+      <Tabs.Screen
+        name="index"
+        options={{
+          title: "Today",
+          tabBarIcon: makeTabIcon("index"),
+          tabBarBadge: badgeValue("index"),
+          tabBarBadgeStyle: badgeStyle("index"),
+        }}
+      />
+      <Tabs.Screen
+        name="week"
+        options={{
+          title: "Weekly Plan",
+          tabBarIcon: makeTabIcon("week"),
+          tabBarBadge: badgeValue("week"),
+          tabBarBadgeStyle: badgeStyle("week"),
+        }}
+      />
+      <Tabs.Screen
+        name="workouts"
+        options={{
+          title: "Workouts",
+          tabBarIcon: makeTabIcon("workouts"),
+          tabBarBadge: badgeValue("workouts"),
+          tabBarBadgeStyle: badgeStyle("workouts"),
+        }}
+      />
+      <Tabs.Screen
+        name="nutrition"
+        options={{
+          title: "Nutrition",
+          tabBarIcon: makeTabIcon("nutrition"),
+          tabBarBadge: badgeValue("nutrition"),
+          tabBarBadgeStyle: badgeStyle("nutrition"),
+        }}
+      />
 
       {/* New Profile tab */}
-      <Tabs.Screen name="profile" options={{ title: "Profile", tabBarIcon: makeTabIcon("profile") }} />
+      <Tabs.Screen
+        name="profile"
+        options={{
+          title: "Profile",
+          tabBarIcon: makeTabIcon("profile"),
+          tabBarBadge: badgeValue("profile"),
+          tabBarBadgeStyle: badgeStyle("profile"),
+        }}
+      />
     </Tabs>
   );
 }

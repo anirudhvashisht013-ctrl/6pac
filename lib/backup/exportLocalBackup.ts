@@ -3,6 +3,7 @@ import {
   logsRepo,
   mealsRepo,
   measurementsRepo,
+  remindersRepo,
   schedulesRepo,
   sessionsRepo,
   targetsRepo,
@@ -22,10 +23,11 @@ type BackupPayload = {
   templates: unknown[];
   sessions: unknown[];
   measurements: unknown[];
+  reminders: unknown | null;
 };
 
 export async function exportLocalBackup(uid: string): Promise<void> {
-  const [profile, logs, meals, targets, schedules, templates, sessions, measurements] = await Promise.all([
+  const [profile, logs, meals, targets, schedules, templates, sessions, measurements, reminders] = await Promise.all([
     getUserProfile(uid).catch(() => null),
     logsRepo.getAll(uid),
     mealsRepo.getAll(uid),
@@ -34,6 +36,7 @@ export async function exportLocalBackup(uid: string): Promise<void> {
     workoutsRepo.getAll(uid),
     sessionsRepo.getAll(uid),
     measurementsRepo.getAll(uid),
+    remindersRepo.get(uid),
   ]);
 
   const payload: BackupPayload = {
@@ -48,6 +51,7 @@ export async function exportLocalBackup(uid: string): Promise<void> {
     templates,
     sessions,
     measurements,
+    reminders,
   };
 
   const json = JSON.stringify(payload, null, 2);

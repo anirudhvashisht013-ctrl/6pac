@@ -11,6 +11,7 @@ import SubtleSplash from "@/components/SubtleSplash";
 import { queryClient } from "@/lib/query-client";
 import { AuthProvider, useAuth } from "@/context/AuthContext";
 import { FeedbackToastProvider } from "@/context/FeedbackToastContext";
+import { ReminderProvider } from "@/context/ReminderContext";
 import {
   Outfit_400Regular,
   Outfit_500Medium,
@@ -74,6 +75,7 @@ function RootLayoutNav() {
       <Stack.Screen name="measurements" options={{ presentation: "modal", headerShown: false }} />
       <Stack.Screen name="profile-progress" options={{ headerShown: false }} />
       <Stack.Screen name="profile-measurements" options={{ headerShown: false }} />
+      <Stack.Screen name="reminders-settings" options={{ headerShown: false }} />
       <Stack.Screen name="exercises" options={{ headerShown: false }} />
       <Stack.Screen name="edit-profile" options={{ presentation: "modal", headerShown: false }} />
     </Stack>
@@ -94,14 +96,16 @@ export default function RootLayout() {
     <ErrorBoundary>
       <QueryClientProvider client={queryClient}>
         <AuthProvider>
-          <SafeAreaProvider>
-            <GestureHandlerRootView style={{ flex: 1, backgroundColor: C.bg }}>
-              <FeedbackToastProvider>
-                <RootLayoutNav />
-                <FeedbackToastHost />
-              </FeedbackToastProvider>
-            </GestureHandlerRootView>
-          </SafeAreaProvider>
+          <ReminderProvider>
+            <SafeAreaProvider>
+              <GestureHandlerRootView style={{ flex: 1, backgroundColor: C.bg }}>
+                <FeedbackToastProvider>
+                  <RootLayoutNav />
+                  <FeedbackToastHost />
+                </FeedbackToastProvider>
+              </GestureHandlerRootView>
+            </SafeAreaProvider>
+          </ReminderProvider>
         </AuthProvider>
       </QueryClientProvider>
     </ErrorBoundary>

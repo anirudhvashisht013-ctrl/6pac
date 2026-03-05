@@ -1,5 +1,5 @@
 // app/(tabs)/profile.tsx
-import React, { useCallback, useState } from "react";
+import React, { useCallback, useMemo, useState } from "react";
 import { Alert, View, Text, ScrollView, StyleSheet, Pressable, ActivityIndicator, Platform, Modal } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
@@ -14,6 +14,7 @@ import { exportAsCSVFile } from "@/lib/export";
 import { useMirrorSyncState } from "@/lib/sync/mirrorQueue";
 import { useNetworkStatus } from "@/lib/network";
 import { syncNow } from "@/lib/sync/syncNow";
+import { useReminders } from "@/context/ReminderContext";
 
 type ProfileDoc = {
   email?: string;
@@ -25,6 +26,7 @@ type ProfileDoc = {
 export default function ProfileHubScreen() {
   const insets = useSafeAreaInsets();
   const { user, logout } = useAuth();
+  const { pendingItems } = useReminders();
   const sync = useMirrorSyncState();
   const network = useNetworkStatus();
 
@@ -141,6 +143,13 @@ export default function ProfileHubScreen() {
       : sync.lastSyncedAt
         ? `Last synced ${new Date(sync.lastSyncedAt).toLocaleString()}`
         : "No pending changes";
+  const hasMeasurementPending = useMemo(
+    () =>
+      pendingItems.some(
+        (item) => item.type === "measurements" || item.type === "measurementOnboarding"
+      ),
+    [pendingItems]
+  );
 
   return (
     <View style={{ flex: 1, backgroundColor: C.bg }}>
@@ -217,7 +226,10 @@ export default function ProfileHubScreen() {
               <Ionicons name="body-outline" size={18} color={C.primary} />
             </View>
             <View style={{ flex: 1 }}>
-              <Text style={styles.navTitle}>Body Measurements</Text>
+              <View style={styles.navTitleRow}>
+                <Text style={styles.navTitle}>Body Measurements</Text>
+                {hasMeasurementPending ? <View style={styles.reminderDot} /> : null}
+              </View>
               <Text style={styles.navSub}>Waist, chest, shoulders, body fat</Text>
             </View>
           </View>
@@ -235,6 +247,22 @@ export default function ProfileHubScreen() {
             <View style={{ flex: 1 }}>
               <Text style={styles.navTitle}>Exercises</Text>
               <Text style={styles.navSub}>Library, alternatives, and metadata</Text>
+            </View>
+          </View>
+          <Ionicons name="chevron-forward" size={18} color={C.textMuted} />
+        </Pressable>
+
+        <Pressable
+          style={({ pressed }) => [styles.navRow, pressed && { opacity: 0.9 }]}
+          onPress={() => router.push("/reminders-settings" as any)}
+        >
+          <View style={styles.navLeft}>
+            <View style={styles.navIconWrap}>
+              <Ionicons name="notifications-outline" size={18} color={C.primary} />
+            </View>
+            <View style={{ flex: 1 }}>
+              <Text style={styles.navTitle}>Notifications & Reminders</Text>
+              <Text style={styles.navSub}>Preferences, times, and quiet hours</Text>
             </View>
           </View>
           <Ionicons name="chevron-forward" size={18} color={C.textMuted} />
@@ -434,6 +462,15 @@ const styles = StyleSheet.create({
     justifyContent: "center",
   },
   navTitle: { fontFamily: "Outfit_700Bold", fontSize: 14, color: C.text },
+  navTitleRow: { flexDirection: "row", alignItems: "center", gap: 6 },
+  reminderDot: {
+    width: 8,
+    height: 8,
+    borderRadius: 99,
+    backgroundColor: C.error,
+    borderWidth: 1,
+    borderColor: C.surface2,
+  },
   navSub: { fontFamily: "Outfit_400Regular", fontSize: 12, color: C.textMuted, marginTop: 2 },
 
   actionsWrap: { flexDirection: "row", flexWrap: "wrap", gap: 10, marginBottom: 14 },

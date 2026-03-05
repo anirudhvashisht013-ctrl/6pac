@@ -13,14 +13,16 @@ import {
   Platform,
   UIManager,
 } from 'react-native';
-import { router, useLocalSearchParams } from 'expo-router';
+import { router, useFocusEffect, useLocalSearchParams } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
 import * as Haptics from 'expo-haptics';
 import { C } from '@/constants/colors';
 import { useAuth } from '@/context/AuthContext';
 import { MAX_REFERENCE_VIDEO_URLS } from '@/lib/exercises/constants';
+import { todayYMD } from '@/lib/dates';
 import { exercisesRepo, sessionsRepo, workoutsRepo } from '@/lib/storage';
+import { confirm } from '@/lib/ui/confirm';
 import type { ExerciseLibraryItem, WorkoutSession, WorkoutTemplate, GymSet } from '@/lib/types';
 import {
   fetchWorkoutQuotesFromInternet,
@@ -64,36 +66,77 @@ export default function PlayerScreen() {
     router.replace('/(tabs)/workouts');
   }, []);
 
-  // Load session + template
-  useEffect(() => {
-    (async () => {
-      if (!user || !sessionId) return;
-
-      const s = await sessionsRepo.getById(user.id, sessionId);
-      if (!s) {
-        navigateToWorkouts();
-        return;
-      }
-      if (s.completed) setFinished(true);
-      setSession(s);
-
-      const t = await workoutsRepo.getById(user.id, s.workoutTemplateId);
-      setTemplate(t);
-
-      const exercises = await exercisesRepo.getAll(user.id);
-      setExercisesById(new Map(exercises.map((exercise) => [exercise.id, exercise])));
-
+  const loadSessionState = useCallback(async () => {
+    if (!user || !sessionId) {
       setLoading(false);
-    })();
+      return;
+    }
+    setLoading(true);
+
+    const s = await sessionsRepo.getById(user.id, sessionId);
+    if (!s) {
+      setLoading(false);
+      navigateToWorkouts();
+      return;
+    }
+
+    const firstIncompleteIdx = s.blockPerformances.findIndex((item) => !item.completed);
+    const resumeIdx =
+      firstIncompleteIdx >= 0
+        ? firstIncompleteIdx
+        : Math.max(0, s.blockPerformances.length - 1);
+
+    setCurrentBlockIdx(resumeIdx);
+    setFinished(!!s.completed);
+    setSession(s);
+
+    const t = await workoutsRepo.getById(user.id, s.workoutTemplateId);
+    setTemplate(t);
+
+    const exercises = await exercisesRepo.getAll(user.id);
+    setExercisesById(new Map(exercises.map((exercise) => [exercise.id, exercise])));
+
+    setLoading(false);
   }, [user, sessionId, navigateToWorkouts]);
 
-  const saveSession = useCallback(async (updates: Partial<WorkoutSession>) => {
+  useFocusEffect(
+    useCallback(() => {
+      void loadSessionState();
+    }, [loadSessionState])
+  );
+
+  const saveSession = useCallback(async (
+    updates: Partial<WorkoutSession>,
+    opts?: { syncToCloud?: boolean }
+  ) => {
     if (!user || !session) return;
     const updated = { ...session, ...updates };
-    await sessionsRepo.save(user.id, updated);
+    await sessionsRepo.save(user.id, updated, opts);
     setSession(updated);
     return updated;
   }, [user, session]);
+
+  const effectiveSessionBlocks = useMemo(
+    () => session?.sessionBlocks || template?.blocks || [],
+    [session?.sessionBlocks, template?.blocks]
+  );
+
+  const blocksById = useMemo(
+    () => new Map(effectiveSessionBlocks.map((item) => [item.id, item] as const)),
+    [effectiveSessionBlocks]
+  );
+
+  const orderedBlocks = useMemo(() => {
+    if (!session || !template) return [];
+    return session.blockPerformances
+      .map((performance) => blocksById.get(performance.blockId))
+      .filter((item): item is WorkoutTemplate['blocks'][number] => !!item);
+  }, [session, blocksById]);
+
+  useEffect(() => {
+    if (orderedBlocks.length === 0) return;
+    setCurrentBlockIdx((prev) => Math.min(prev, orderedBlocks.length - 1));
+  }, [orderedBlocks.length]);
 
   const updateBlockPerformance = useCallback(async (
     blockId: string,
@@ -138,27 +181,42 @@ export default function PlayerScreen() {
   };
 
   const endWorkout = async () => {
-    await saveSession({ endedAt: new Date().toISOString(), completed: true });
+    await saveSession(
+      { endedAt: new Date().toISOString(), completed: true, missed: false },
+      { syncToCloud: true }
+    );
     Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
     setFinished(true);
   };
 
+  const confirmAndEndWorkout = async () => {
+    const ok = await confirm({
+      title: 'End workout now?',
+      message: 'This will finish your workout and save your current progress.',
+      okText: 'End Workout',
+      cancelText: 'Keep Training',
+      destructive: true,
+    });
+    if (!ok) return;
+    await endWorkout();
+  };
+
   // Auto-advance to next block (used when rest ends)
   const handleAutoAdvance = useCallback(() => {
-    if (!template) return;
+    if (orderedBlocks.length === 0) return;
 
     setCurrentBlockIdx(prev => {
       const next = prev + 1;
-      if (next < template.blocks.length) return next;
+      if (next < orderedBlocks.length) return next;
       return prev;
     });
-  }, [template]);
+  }, [orderedBlocks.length]);
 
   // Rest timer lifecycle: whenever current block becomes "rest", start timer for that block.seconds.
   useEffect(() => {
-    if (!template) return;
+    if (orderedBlocks.length === 0) return;
 
-    const block = template.blocks[currentBlockIdx];
+    const block = orderedBlocks[currentBlockIdx];
     if (!block || block.type !== 'rest') {
       if (restTimer.current) clearInterval(restTimer.current);
       restTimer.current = null;
@@ -190,7 +248,7 @@ export default function PlayerScreen() {
       if (restTimer.current) clearInterval(restTimer.current);
       restTimer.current = null;
     };
-  }, [template, currentBlockIdx, handleAutoAdvance]);
+  }, [orderedBlocks, currentBlockIdx, handleAutoAdvance]);
 
   const skipRest = () => {
     if (restTimer.current) clearInterval(restTimer.current);
@@ -200,14 +258,14 @@ export default function PlayerScreen() {
   };
 
   const completeBlock = async () => {
-    if (!template || !session) return;
+    if (!session || orderedBlocks.length === 0) return;
 
-    const block = template.blocks[currentBlockIdx];
+    const block = orderedBlocks[currentBlockIdx];
     await updateBlockPerformance(block.id, { completed: true });
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
 
     const nextIdx = currentBlockIdx + 1;
-    if (nextIdx >= template.blocks.length) {
+    if (nextIdx >= orderedBlocks.length) {
       await endWorkout();
       return;
     }
@@ -218,6 +276,29 @@ export default function PlayerScreen() {
 
   const closeVideo = () => setActiveVideoUrl(null);
   const handlePlay = (url: string) => setActiveVideoUrl(url);
+
+  useEffect(() => {
+    if (!session || session.completed || session.endedAt) return;
+
+    const checkForDayEnd = async () => {
+      const today = todayYMD();
+      if (session.date >= today) return;
+      await saveSession(
+        { endedAt: new Date().toISOString(), missed: true, completed: false },
+        { syncToCloud: true }
+      );
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning);
+      navigateToWorkouts();
+    };
+
+    const timer = setInterval(() => {
+      void checkForDayEnd();
+    }, 60 * 1000);
+
+    void checkForDayEnd();
+
+    return () => clearInterval(timer);
+  }, [session, saveSession, navigateToWorkouts]);
 
   const ensureMetaLoaded = useCallback(
     async (urls: string[]) => {
@@ -278,14 +359,25 @@ export default function PlayerScreen() {
     await updateBlockPerformance(blockId, { exerciseIdOverride: nextOverride });
   };
 
+  const openPlaylist = useCallback(() => {
+    if (!session) return;
+    router.push({
+      pathname: '/workout-playlist',
+      params: {
+        sessionId: session.id,
+        currentBlockIdx: String(currentBlockIdx),
+      },
+    });
+  }, [session, currentBlockIdx]);
+
   /**
    * IMPORTANT FIX:
    * These derived values + this effect MUST live ABOVE any early returns.
    * Otherwise hooks order changes between renders and React crashes.
    */
   const derived = useMemo(() => {
-    const b = template?.blocks?.[currentBlockIdx];
-    const nb = template?.blocks?.[currentBlockIdx + 1];
+    const b = orderedBlocks[currentBlockIdx];
+    const nb = orderedBlocks[currentBlockIdx + 1];
     const currentExercise = getLibraryExerciseForBlock(b);
     const nextExercise = getLibraryExerciseForBlock(nb);
 
@@ -299,7 +391,7 @@ export default function PlayerScreen() {
         : [];
 
     return { block: b, nextBlock: nb, currentExerciseUrls, nextExerciseUrls };
-  }, [template, currentBlockIdx, getLibraryExerciseForBlock]);
+  }, [orderedBlocks, currentBlockIdx, getLibraryExerciseForBlock]);
 
   useEffect(() => {
     if (!template) return;
@@ -378,13 +470,13 @@ export default function PlayerScreen() {
     );
   }
 
-  if (!template || !session) return null;
+  if (!template || !session || orderedBlocks.length === 0) return null;
 
   const block = derived.block!;
   const nextBlock = derived.nextBlock;
-  const isLastBlock = currentBlockIdx === template.blocks.length - 1;
+  const isLastBlock = currentBlockIdx === orderedBlocks.length - 1;
   const perf = getPerformanceForBlock(block.id);
-  const progress = `${currentBlockIdx + 1} / ${template.blocks.length}`;
+  const progress = `${currentBlockIdx + 1} / ${orderedBlocks.length}`;
   const baseExercise = block.type === 'gym' && block.exerciseId ? exercisesById.get(block.exerciseId) || null : null;
   const activeExercise = block.type === 'gym' ? getLibraryExerciseForBlock(block) : null;
   const switchCandidateIds =
@@ -421,11 +513,16 @@ export default function PlayerScreen() {
           <Text style={styles.headerProgress}>{progress}</Text>
         </View>
 
-        <View style={{ width: 40 }} />
+        <Pressable
+          style={({ pressed }) => [styles.playlistBtn, pressed && { opacity: 0.85 }]}
+          onPress={openPlaylist}
+        >
+          <Ionicons name="reorder-three-outline" size={22} color={C.primary} />
+        </Pressable>
       </View>
 
       <View style={styles.progressBar}>
-        <View style={[styles.progressFill, { width: `${(currentBlockIdx / template.blocks.length) * 100}%` }]} />
+        <View style={[styles.progressFill, { width: `${(currentBlockIdx / orderedBlocks.length) * 100}%` }]} />
       </View>
 
       <ScrollView
@@ -608,6 +705,12 @@ export default function PlayerScreen() {
                   </Text>
                 </>
               )}
+              <Pressable
+                style={({ pressed }) => [styles.reorderInlineBtn, pressed && { opacity: 0.85 }]}
+                onPress={openPlaylist}
+              >
+                <Ionicons name="reorder-three-outline" size={18} color={C.primary} />
+              </Pressable>
             </View>
           </View>
         )}
@@ -666,7 +769,7 @@ export default function PlayerScreen() {
 
       {(block.type !== 'rest' || isLastBlock) && (
         <View style={[styles.bottomBar, { paddingBottom: insets.bottom + 16 }]}>
-          <Pressable style={({ pressed }) => [styles.endBtn, pressed && { opacity: 0.8 }]} onPress={endWorkout}>
+          <Pressable style={({ pressed }) => [styles.endBtn, pressed && { opacity: 0.8 }]} onPress={confirmAndEndWorkout}>
             <Ionicons name="flag-outline" size={18} color={C.error} />
             <Text style={styles.endBtnText}>End Workout</Text>
           </Pressable>
@@ -690,6 +793,16 @@ const styles = StyleSheet.create({
   headerCenter: { alignItems: 'center', flex: 1 },
   headerTitle: { fontFamily: 'Outfit_700Bold', fontSize: 17, color: C.text },
   headerProgress: { fontFamily: 'Outfit_400Regular', fontSize: 12, color: C.textMuted },
+  playlistBtn: {
+    width: 40,
+    height: 40,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: C.primary + '55',
+    backgroundColor: C.primaryBg,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
 
   progressBar: {
     height: 3,
@@ -863,6 +976,16 @@ const styles = StyleSheet.create({
     borderColor: C.border,
   },
   nextCardText: { fontFamily: 'Outfit_500Medium', fontSize: 14, color: C.textSecondary, flex: 1 },
+  reorderInlineBtn: {
+    width: 34,
+    height: 34,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: C.primary + '55',
+    backgroundColor: C.primaryBg,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
 
   bottomBar: {
     paddingHorizontal: 20,

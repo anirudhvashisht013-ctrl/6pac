@@ -101,6 +101,7 @@ export default function EditorScreen() {
   const isNew = id === 'new';
 
   const [name, setName] = useState('');
+  const [notes, setNotes] = useState('');
   const [blocks, setBlocks] = useState<WorkoutBlock[]>([]);
   const [exercises, setExercises] = useState<ExerciseLibraryItem[]>([]);
   const [loading, setLoading] = useState(true);
@@ -142,9 +143,11 @@ export default function EditorScreen() {
 
         if (template) {
           setName(template.name);
+          setNotes(template.notes || '');
           setBlocks(template.blocks);
-        } else if (!isNew) {
+        } else {
           setName('');
+          setNotes('');
           setBlocks([]);
         }
 
@@ -167,6 +170,7 @@ export default function EditorScreen() {
       const template: WorkoutTemplate = {
         id: isNew ? Crypto.randomUUID() : id,
         name: name.trim(),
+        notes: notes.trim() ? notes.trim() : null,
         blocks,
         createdAt: now,
         updatedAt: now,
@@ -344,6 +348,20 @@ export default function EditorScreen() {
             placeholder="e.g. Upper Body Push"
             placeholderTextColor={C.textMuted}
             autoFocus={isNew}
+          />
+        </View>
+
+        <View style={styles.notesField}>
+          <Text style={styles.fieldLabel}>Workout Notes (optional)</Text>
+          <TextInput
+            style={styles.notesInput}
+            value={notes}
+            onChangeText={setNotes}
+            placeholder="e.g. Chest day focused on incline and machine work"
+            placeholderTextColor={C.textMuted}
+            multiline
+            numberOfLines={3}
+            textAlignVertical="top"
           />
         </View>
 
@@ -594,10 +612,23 @@ const styles = StyleSheet.create({
   saveBtnText: { fontFamily: 'Outfit_600SemiBold', fontSize: 14, color: C.bg },
   content: { paddingHorizontal: 20, paddingTop: 20 },
   nameField: { marginBottom: 24 },
+  notesField: { marginBottom: 24 },
   fieldLabel: { fontFamily: 'Outfit_500Medium', fontSize: 13, color: C.textMuted, marginBottom: 8 },
   nameInput: {
     backgroundColor: C.surface2, borderRadius: 12, borderWidth: 1, borderColor: C.border,
     paddingHorizontal: 14, height: 52, fontFamily: 'Outfit_600SemiBold', fontSize: 18, color: C.text,
+  },
+  notesInput: {
+    backgroundColor: C.surface2,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: C.border,
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+    minHeight: 88,
+    fontFamily: 'Outfit_400Regular',
+    fontSize: 15,
+    color: C.text,
   },
   blocksHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 },
   sectionTitle: { fontFamily: 'Outfit_600SemiBold', fontSize: 16, color: C.textSecondary },

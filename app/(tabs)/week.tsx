@@ -9,6 +9,7 @@ import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
 import * as Haptics from 'expo-haptics';
 import { C } from '@/constants/colors';
 import { useAuth } from '@/context/AuthContext';
+import { useFeedbackToast } from '@/context/FeedbackToastContext';
 import {
   schedulesRepo, targetsRepo, logsRepo, mealsRepo,
   workoutsRepo, sessionsRepo,
@@ -162,6 +163,7 @@ function DayCard({
 export default function WeekScreen() {
   const insets = useSafeAreaInsets();
   const { user } = useAuth();
+  const { showToast } = useFeedbackToast();
   const today = todayYMD();
   const currentWeekStart = getMondayYMD(today);
   const latestPlanningWeekStart = toYMD(addDays(new Date(`${currentWeekStart}T00:00:00`), 7 * 5));
@@ -188,6 +190,7 @@ export default function WeekScreen() {
     weightGoalType: 'maintain',
   });
   const [selectDayModal, setSelectDayModal] = useState<{ day: PlannedDay; idx: number } | null>(null);
+  const [workoutSearch, setWorkoutSearch] = useState('');
 
   const load = useCallback(async () => {
     if (!user) {
@@ -214,6 +217,10 @@ export default function WeekScreen() {
   }, [user]);
 
   useFocusEffect(useCallback(() => { load(); }, [load]));
+
+  useEffect(() => {
+    if (!selectDayModal) setWorkoutSearch('');
+  }, [selectDayModal]);
 
   const bounds = useMemo(() => {
     let first: ISODate | null = null;
@@ -387,6 +394,7 @@ export default function WeekScreen() {
     setAllTargets((prev) => upsertByWeek(prev, tgt));
     setEditingTarget(false);
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+    showToast({ message: 'Weekly targets saved', tone: 'success' });
   };
 
   const updateDayStatus = async (idx: number, status: DayStatus, workoutTemplateId: string | null = null) => {
@@ -398,6 +406,7 @@ export default function WeekScreen() {
     setAllSchedules((prev) => upsertByWeek(prev, newSchedule));
     setSelectDayModal(null);
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    showToast({ message: 'Day plan saved', tone: 'success' });
   };
 
   const handleDayPress = (day: PlannedDay, idx: number) => {
@@ -408,6 +417,10 @@ export default function WeekScreen() {
   const getMealsForDate = (date: string) => meals.filter(m => m.date === date);
   const getTemplate = (id: string | null) => id ? templates.find(t => t.id === id) || null : null;
   const getSessionsForDate = (date: string) => sessions.filter(s => s.date === date);
+  const filteredTemplates = useMemo(
+    () => templates.filter((template) => matchesTemplateSearch(template, workoutSearch)),
+    [templates, workoutSearch]
+  );
 
   const weeklyStats = {
     workoutsPlanned: schedule.days.filter((d) => d.status === 'planned_workout').length,
@@ -731,7 +744,8 @@ export default function WeekScreen() {
       </ScrollView>
 
       <Modal visible={!!selectDayModal} transparent animationType="fade" onRequestClose={() => setSelectDayModal(null)}>
-        <Pressable style={styles.modalOverlay} onPress={() => setSelectDayModal(null)}>
+        <View style={styles.modalOverlay}>
+          <Pressable style={styles.modalBackdrop} onPress={() => setSelectDayModal(null)} />
           <View style={styles.modalCard}>
             <Text style={styles.modalTitle}>
               {selectDayModal ? `${dayLabel(selectDayModal.day.date)}, ${formatDate(selectDayModal.day.date)}` : ''}
@@ -744,29 +758,58 @@ export default function WeekScreen() {
             </Pressable>
 
             <Text style={styles.modalPickHeader}>Choose Workout</Text>
+            <View style={styles.modalSearchWrap}>
+              <Ionicons name="search" size={16} color={C.textMuted} />
+              <TextInput
+                style={styles.modalSearchInput}
+                value={workoutSearch}
+                onChangeText={setWorkoutSearch}
+                placeholder="Search by name or notes"
+                placeholderTextColor={C.textMuted}
+                autoCapitalize="none"
+                autoCorrect={false}
+              />
+            </View>
+
             {templates.length === 0 ? (
               <Text style={styles.noTemplatesText}>No templates yet — create one in Workouts</Text>
+            ) : filteredTemplates.length === 0 ? (
+              <Text style={styles.noSearchResultsText}>No workouts match your search.</Text>
             ) : (
-              templates.map(t => (
-                <Pressable
-                  key={t.id}
-                  style={[
-                    styles.modalOption,
-                    selectDayModal?.day.workoutTemplateId === t.id && styles.modalOptionSelected,
-                  ]}
-                  onPress={() => selectDayModal && updateDayStatus(selectDayModal.idx, 'planned_workout', t.id)}
-                >
-                  <MaterialCommunityIcons name="dumbbell" size={18} color={C.primary} />
-                  <Text style={styles.modalOptionText}>{t.name}</Text>
-                </Pressable>
-              ))
+              <ScrollView
+                style={styles.modalList}
+                contentContainerStyle={styles.modalListContent}
+                keyboardShouldPersistTaps="handled"
+                showsVerticalScrollIndicator={false}
+              >
+                {filteredTemplates.map((t) => (
+                  <Pressable
+                    key={t.id}
+                    style={[
+                      styles.modalOption,
+                      selectDayModal?.day.workoutTemplateId === t.id && styles.modalOptionSelected,
+                    ]}
+                    onPress={() => selectDayModal && updateDayStatus(selectDayModal.idx, 'planned_workout', t.id)}
+                  >
+                    <MaterialCommunityIcons name="dumbbell" size={18} color={C.primary} />
+                    <View style={styles.modalOptionBody}>
+                      <Text style={styles.modalOptionText}>{t.name}</Text>
+                      {!!t.notes?.trim() && (
+                        <Text style={styles.modalOptionMeta} numberOfLines={2}>
+                          {t.notes.trim()}
+                        </Text>
+                      )}
+                    </View>
+                  </Pressable>
+                ))}
+              </ScrollView>
             )}
 
             <Pressable style={styles.modalCancelBtn} onPress={() => setSelectDayModal(null)}>
               <Text style={styles.modalCancelText}>Cancel</Text>
             </Pressable>
           </View>
-        </Pressable>
+        </View>
       </Modal>
     </View>
   );
@@ -828,6 +871,13 @@ function parseOptionalNumber(value: string): number | null {
   if (!clean) return null;
   const parsed = parseFloat(clean);
   return Number.isFinite(parsed) ? parsed : null;
+}
+
+function matchesTemplateSearch(template: WorkoutTemplate, query: string) {
+  const q = query.trim().toLowerCase();
+  if (!q) return true;
+  const haystack = `${template.name} ${template.notes || ''}`.toLowerCase();
+  return haystack.includes(q);
 }
 
 function formatMetric(value: number | null, decimals = 0) {
@@ -1014,20 +1064,56 @@ const styles = StyleSheet.create({
   modalOverlay: {
     flex: 1, backgroundColor: 'rgba(0,0,0,0.7)', alignItems: 'center', justifyContent: 'flex-end',
   },
+  modalBackdrop: {
+    ...StyleSheet.absoluteFillObject,
+  },
   modalCard: {
     width: '100%', backgroundColor: C.surface, borderTopLeftRadius: 20, borderTopRightRadius: 20,
-    padding: 20, paddingBottom: 34, gap: 12,
+    maxHeight: '88%', padding: 20, paddingBottom: 34, gap: 12,
   },
   modalTitle: { fontFamily: 'Outfit_700Bold', fontSize: 18, color: C.text },
   modalSubtitle: { fontFamily: 'Outfit_400Regular', fontSize: 13, color: C.textMuted, marginTop: -4 },
   modalPickHeader: { fontFamily: 'Outfit_600SemiBold', fontSize: 14, color: C.textMuted, marginTop: 4 },
+  modalSearchWrap: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    borderWidth: 1,
+    borderColor: C.border,
+    borderRadius: 10,
+    backgroundColor: C.surface2,
+    paddingHorizontal: 12,
+    height: 46,
+  },
+  modalSearchInput: {
+    flex: 1,
+    fontFamily: 'Outfit_400Regular',
+    fontSize: 15,
+    color: C.text,
+  },
+  modalList: {
+    maxHeight: 300,
+  },
+  modalListContent: {
+    gap: 8,
+    paddingVertical: 2,
+  },
   modalOption: {
-    flexDirection: 'row', alignItems: 'center', gap: 12,
-    backgroundColor: C.surface2, borderRadius: 12, padding: 14, borderWidth: 1, borderColor: C.border,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    backgroundColor: C.surface2,
+    borderRadius: 12,
+    padding: 14,
+    borderWidth: 1,
+    borderColor: C.border,
   },
   modalOptionSelected: { borderColor: C.primary, backgroundColor: C.primaryBg },
+  modalOptionBody: { flex: 1, gap: 2 },
   modalOptionText: { fontFamily: 'Outfit_500Medium', fontSize: 15, color: C.textSecondary, flex: 1 },
+  modalOptionMeta: { fontFamily: 'Outfit_400Regular', fontSize: 12, color: C.textMuted },
   noTemplatesText: { fontFamily: 'Outfit_400Regular', fontSize: 14, color: C.textMuted, textAlign: 'center', padding: 16 },
+  noSearchResultsText: { fontFamily: 'Outfit_400Regular', fontSize: 14, color: C.textMuted, textAlign: 'center', padding: 16 },
   modalCancelBtn: {
     height: 48, borderRadius: 12, borderWidth: 1, borderColor: C.border,
     alignItems: 'center', justifyContent: 'center', marginTop: 4,

@@ -16,6 +16,7 @@ import { Ionicons } from "@expo/vector-icons";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { C } from "@/constants/colors";
 import { useReminders } from "@/context/ReminderContext";
+import { useFeedbackToast } from "@/context/FeedbackToastContext";
 
 function isValidClock(value: string): boolean {
   if (!/^\d{2}:\d{2}$/.test(value)) return false;
@@ -66,6 +67,7 @@ function SettingRow({
 
 export default function ReminderSettingsScreen() {
   const insets = useSafeAreaInsets();
+  const { showToast } = useFeedbackToast();
   const {
     state,
     isLoading,
@@ -111,6 +113,9 @@ export default function ReminderSettingsScreen() {
         dailyLogging: { time: dailyTime },
         quietHours: { start: quietStart, end: quietEnd },
       });
+      showToast({ message: "Reminder settings saved", tone: "success" });
+    } catch (error) {
+      showToast({ message: "Unable to save reminder settings. Please try again.", tone: "error" });
     } finally {
       setSaving(false);
     }

@@ -11,6 +11,7 @@ import {
   getMeasurementRange,
 } from "@/lib/measurements/localMeasurementsQuery";
 import { emitDataEvent } from "@/lib/dataEvents";
+import { todayYMD } from "@/lib/dates";
 
 const KEY = {
   users: '@6pac:users',
@@ -50,6 +51,21 @@ function toReminderSettingsDoc(state: ReminderState): ReminderSettingsMirrorDoc 
     settings: state.settings,
     createdAt: state.createdAt,
     updatedAt: state.updatedAt,
+  };
+}
+
+function normalizeTemplate(template: WorkoutTemplate): WorkoutTemplate {
+  return {
+    ...template,
+    notes: typeof template.notes === 'string' ? template.notes : null,
+  };
+}
+
+function normalizeSession(session: WorkoutSession): WorkoutSession {
+  return {
+    ...session,
+    sessionBlocks: Array.isArray(session.sessionBlocks) ? session.sessionBlocks : undefined,
+    missed: !!session.missed,
   };
 }
 
@@ -209,20 +225,22 @@ export const schedulesRepo = {
 
 export const workoutsRepo = {
   async getAll(uid: string): Promise<WorkoutTemplate[]> {
-    return (await get<WorkoutTemplate[]>(KEY.templates(uid))) || [];
+    const templates = (await get<WorkoutTemplate[]>(KEY.templates(uid))) || [];
+    return templates.map(normalizeTemplate);
   },
   async getById(uid: string, id: string): Promise<WorkoutTemplate | null> {
     const all = await this.getAll(uid);
     return all.find(t => t.id === id) || null;
   },
   async save(uid: string, template: WorkoutTemplate): Promise<void> {
+    const normalizedTemplate = normalizeTemplate(template);
     const all = await this.getAll(uid);
-    const idx = all.findIndex(t => t.id === template.id);
-    if (idx >= 0) all[idx] = template;
-    else all.push(template);
+    const idx = all.findIndex(t => t.id === normalizedTemplate.id);
+    if (idx >= 0) all[idx] = normalizedTemplate;
+    else all.push(normalizedTemplate);
     await set(KEY.templates(uid), all);
     emitDataEvent(uid, "workouts");
-    mirrorBestEffort(cloudMirrorRepo.upsertTemplate(uid, template), `templates/${template.id}`);
+    mirrorBestEffort(cloudMirrorRepo.upsertTemplate(uid, normalizedTemplate), `templates/${normalizedTemplate.id}`);
   },
   async delete(uid: string, id: string): Promise<void> {
     const all = await this.getAll(uid);
@@ -284,7 +302,34 @@ export const mealsRepo = {
 
 export const sessionsRepo = {
   async getAll(uid: string): Promise<WorkoutSession[]> {
-    return (await get<WorkoutSession[]>(KEY.sessions(uid))) || [];
+    const raw = (await get<WorkoutSession[]>(KEY.sessions(uid))) || [];
+    const today = todayYMD();
+    const nowIso = new Date().toISOString();
+    const updatedForMissed: WorkoutSession[] = [];
+
+    const all = raw.map((item) => {
+      const normalized = normalizeSession(item);
+      if (!normalized.completed && !normalized.endedAt && normalized.date < today) {
+        const markedMissed: WorkoutSession = {
+          ...normalized,
+          endedAt: nowIso,
+          missed: true,
+        };
+        updatedForMissed.push(markedMissed);
+        return markedMissed;
+      }
+      return normalized;
+    });
+
+    if (updatedForMissed.length > 0) {
+      await set(KEY.sessions(uid), all);
+      emitDataEvent(uid, "sessions");
+      updatedForMissed.forEach((session) => {
+        mirrorBestEffort(cloudMirrorRepo.upsertSession(uid, session), `sessions/${session.id}`);
+      });
+    }
+
+    return all;
   },
   async getById(uid: string, id: string): Promise<WorkoutSession | null> {
     const all = await this.getAll(uid);
@@ -294,14 +339,23 @@ export const sessionsRepo = {
     const all = await this.getAll(uid);
     return all.filter(s => s.date === date);
   },
-  async save(uid: string, session: WorkoutSession): Promise<void> {
+  async save(uid: string, session: WorkoutSession, opts?: { syncToCloud?: boolean }): Promise<void> {
+    const normalizedSession = normalizeSession(session);
     const all = await this.getAll(uid);
-    const idx = all.findIndex(s => s.id === session.id);
-    if (idx >= 0) all[idx] = session;
-    else all.push(session);
+    const idx = all.findIndex(s => s.id === normalizedSession.id);
+    if (idx >= 0) all[idx] = normalizedSession;
+    else all.push(normalizedSession);
     await set(KEY.sessions(uid), all);
     emitDataEvent(uid, "sessions");
-    mirrorBestEffort(cloudMirrorRepo.upsertSession(uid, session), `sessions/${session.id}`);
+
+    const shouldMirror =
+      !!opts?.syncToCloud ||
+      normalizedSession.completed ||
+      !!normalizedSession.missed;
+
+    if (shouldMirror) {
+      mirrorBestEffort(cloudMirrorRepo.upsertSession(uid, normalizedSession), `sessions/${normalizedSession.id}`);
+    }
   },
 };
 

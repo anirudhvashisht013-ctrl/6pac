@@ -23,7 +23,7 @@ function latestByStartedAt(sessions: WorkoutSession[]): WorkoutSession | null {
 export default function WorkoutsScreen() {
   const insets = useSafeAreaInsets();
   const { user } = useAuth();
-  const { showUndoToast } = useFeedbackToast();
+  const { showToast, showUndoToast } = useFeedbackToast();
   const today = todayYMD();
 
   const [templates, setTemplates] = useState<WorkoutTemplate[]>([]);
@@ -104,6 +104,7 @@ export default function WorkoutsScreen() {
       date: today,
       workoutTemplateId: template.id,
         workoutNameSnapshot: template.name,
+        sessionBlocks: template.blocks,
         startedAt: now,
         endedAt: null,
         completed: false,
@@ -122,6 +123,7 @@ export default function WorkoutsScreen() {
         })),
       };
     await sessionsRepo.save(user.id, session);
+    showToast({ message: 'Workout started', tone: 'success' });
     router.push({ pathname: '/player', params: { sessionId: session.id } });
   };
 

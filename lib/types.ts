@@ -105,6 +105,7 @@ export interface WorkoutBlock {
 export interface WorkoutTemplate {
   id: string;
   name: string;
+  notes: string | null;
   blocks: WorkoutBlock[];
   createdAt: string;
   updatedAt: string;
@@ -123,9 +124,11 @@ export interface WorkoutSession {
   date: string;
   workoutTemplateId: string;
   workoutNameSnapshot: string;
+  sessionBlocks?: WorkoutBlock[];
   startedAt: string;
   endedAt: string | null;
   completed: boolean;
+  missed?: boolean;
   blockPerformances: BlockPerformance[];
 }
 

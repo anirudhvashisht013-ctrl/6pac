@@ -10,7 +10,6 @@ import React, {
 } from "react";
 import { AppState } from "react-native";
 import { router } from "expo-router";
-import * as Notifications from "expo-notifications";
 import { useAuth } from "@/context/AuthContext";
 import { logsRepo, mealsRepo, measurementsRepo, remindersRepo, schedulesRepo, sessionsRepo, targetsRepo } from "@/lib/storage";
 import { subscribeDataEvents } from "@/lib/dataEvents";
@@ -19,6 +18,7 @@ import {
   getNotificationPermissionStatus,
   openDeviceNotificationSettings,
   requestNotificationPermission,
+  subscribeReminderNotificationResponses,
   syncReminderNotificationSchedule,
   type NotificationPermissionStatus,
 } from "@/lib/reminders/notifications";
@@ -276,18 +276,25 @@ export function ReminderProvider({ children }: { children: ReactNode }) {
       }
     });
 
-    const responseSub = Notifications.addNotificationResponseReceivedListener((response) => {
-      const deepLink = response.notification.request.content.data?.deepLink;
-      if (typeof deepLink === "string" && deepLink.length > 0) {
-        router.push(deepLink as any);
+    let isMounted = true;
+    let removeResponseSub: () => void = () => {};
+
+    void subscribeReminderNotificationResponses((deepLink) => {
+      router.push(deepLink as any);
+    }).then((unsubscribe) => {
+      if (!isMounted) {
+        unsubscribe();
+        return;
       }
+      removeResponseSub = unsubscribe;
     });
 
     return () => {
       clearInterval(interval);
       appStateSub.remove();
       dataSub();
-      responseSub.remove();
+      isMounted = false;
+      removeResponseSub();
     };
   }, [refresh, user?.id]);
 

@@ -12,9 +12,9 @@ import {
   signInWithEmailAndPassword,
   createUserWithEmailAndPassword,
   signOut,
-  type User as FirebaseUser,
-} from "firebase/auth";
-import { auth } from "@/lib/firebase";
+  type FirebaseUser,
+  auth,
+} from "@/lib/firebase";
 import { ensureUserProfile, getUserProfile, markOnboardingDone } from "@/lib/userProfile";
 import { ensureAutoBackupOnce } from "@/lib/backup/autoBackupOnce";
 import { reconcileCloudToLocal } from "@/lib/sync/reconcile";

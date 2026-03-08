@@ -1,16 +1,44 @@
 import { Platform } from "react-native";
+import Constants from "expo-constants";
 import * as Linking from "expo-linking";
-import * as Notifications from "expo-notifications";
 import type { ReminderNotificationPlan } from "@/lib/reminders/engine";
 
 const REMINDER_KIND = "6pac-reminder";
 const ANDROID_CHANNEL_ID = "reminders";
 
 let configured = false;
+let notificationsModulePromise: Promise<ExpoNotificationsModule | null> | null = null;
 
 export type NotificationPermissionStatus = "granted" | "denied" | "undetermined" | "unknown";
 
-function normalizeStatus(status: Notifications.PermissionStatus | undefined): NotificationPermissionStatus {
+type ExpoNotificationsModule = typeof import("expo-notifications");
+
+function isExpoGoAndroid(): boolean {
+  if (Platform.OS !== "android") return false;
+
+  const executionEnvironment = (Constants as any).executionEnvironment;
+  const appOwnership = (Constants as any).appOwnership;
+  return executionEnvironment === "storeClient" || appOwnership === "expo";
+}
+
+async function getNotificationsModule(): Promise<ExpoNotificationsModule | null> {
+  if (!isNotificationsSupported()) {
+    return null;
+  }
+
+  if (!notificationsModulePromise) {
+    notificationsModulePromise = import("expo-notifications")
+      .then((mod) => mod)
+      .catch((error) => {
+        console.warn("Notifications module unavailable:", error);
+        return null;
+      });
+  }
+
+  return notificationsModulePromise;
+}
+
+function normalizeStatus(status: string | undefined): NotificationPermissionStatus {
   if (status === "granted" || status === "denied" || status === "undetermined") {
     return status;
   }
@@ -18,11 +46,14 @@ function normalizeStatus(status: Notifications.PermissionStatus | undefined): No
 }
 
 export function isNotificationsSupported(): boolean {
-  return Platform.OS !== "web";
+  return Platform.OS !== "web" && !isExpoGoAndroid();
 }
 
 export async function configureReminderNotifications(): Promise<void> {
   if (configured || !isNotificationsSupported()) return;
+  const Notifications = await getNotificationsModule();
+  if (!Notifications) return;
+
   configured = true;
 
   Notifications.setNotificationHandler({
@@ -48,7 +79,9 @@ export async function configureReminderNotifications(): Promise<void> {
 }
 
 export async function getNotificationPermissionStatus(): Promise<NotificationPermissionStatus> {
-  if (!isNotificationsSupported()) return "unknown";
+  const Notifications = await getNotificationsModule();
+  if (!Notifications) return "unknown";
+
   try {
     const result = await Notifications.getPermissionsAsync();
     return normalizeStatus(result.status);
@@ -58,7 +91,9 @@ export async function getNotificationPermissionStatus(): Promise<NotificationPer
 }
 
 export async function requestNotificationPermission(): Promise<NotificationPermissionStatus> {
-  if (!isNotificationsSupported()) return "unknown";
+  const Notifications = await getNotificationsModule();
+  if (!Notifications) return "unknown";
+
   try {
     const result = await Notifications.requestPermissionsAsync();
     return normalizeStatus(result.status);
@@ -76,7 +111,8 @@ export async function openDeviceNotificationSettings(): Promise<void> {
 }
 
 async function cancelReminderNotifications(): Promise<void> {
-  if (!isNotificationsSupported()) return;
+  const Notifications = await getNotificationsModule();
+  if (!Notifications) return;
 
   const scheduled = await Notifications.getAllScheduledNotificationsAsync();
   await Promise.all(
@@ -87,7 +123,8 @@ async function cancelReminderNotifications(): Promise<void> {
 }
 
 export async function syncReminderNotificationSchedule(plan: ReminderNotificationPlan[]): Promise<void> {
-  if (!isNotificationsSupported()) return;
+  const Notifications = await getNotificationsModule();
+  if (!Notifications) return;
 
   await configureReminderNotifications();
   await cancelReminderNotifications();
@@ -111,7 +148,27 @@ export async function syncReminderNotificationSchedule(plan: ReminderNotificatio
         type: Notifications.SchedulableTriggerInputTypes.DATE,
         date: fireAt,
         ...(Platform.OS === "android" ? { channelId: ANDROID_CHANNEL_ID } : {}),
-      },
-    });
+      } as any,
+    } as any);
   }
+}
+
+export async function subscribeReminderNotificationResponses(
+  onDeepLink: (deepLink: string) => void
+): Promise<() => void> {
+  const Notifications = await getNotificationsModule();
+  if (!Notifications) {
+    return () => undefined;
+  }
+
+  const responseSub = Notifications.addNotificationResponseReceivedListener((response: any) => {
+    const deepLink = response?.notification?.request?.content?.data?.deepLink;
+    if (typeof deepLink === "string" && deepLink.length > 0) {
+      onDeepLink(deepLink);
+    }
+  });
+
+  return () => {
+    responseSub.remove();
+  };
 }

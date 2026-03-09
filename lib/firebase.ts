@@ -3,14 +3,14 @@ import { Platform } from "react-native";
 import firebaseCompat from "firebase/compat/app";
 import "firebase/compat/auth";
 import "firebase/compat/firestore";
-import { getApp, getApps, initializeApp } from "@firebase/app";
-import * as FirebaseAuth from "@firebase/auth";
+import { getApp, getApps, initializeApp } from "firebase/app";
+import * as FirebaseAuth from "firebase/auth";
 import {
   disableNetwork,
   enableIndexedDbPersistence,
   enableNetwork,
   getFirestore,
-} from "@firebase/firestore";
+} from "firebase/firestore";
 import { getIsOnline, startNetworkListener, subscribeNetworkStatus } from "@/lib/network";
 
 const firebaseConfig = {
@@ -66,7 +66,7 @@ export const auth = (() => {
   }
 })();
 
-export type FirebaseUser = import("@firebase/auth").User;
+export type FirebaseUser = import("firebase/auth").User;
 type CompatAuth = {
   onAuthStateChanged: (
     nextOrObserver: (...args: any[]) => void,

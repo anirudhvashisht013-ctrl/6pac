@@ -3,6 +3,10 @@
   "compilerOptions": {
     "baseUrl": ".",
     "strict": true,
+    "jsx": "react-native",
+    "esModuleInterop": true,
+    "allowSyntheticDefaultImports": true,
+    "moduleResolution": "bundler",
     "moduleSuffixes": [".native", ".ios", ".android", ".web", ""],
     "paths": {
       "@/*": ["./*"],

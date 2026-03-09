@@ -163,8 +163,13 @@ const styles = StyleSheet.create({
     justifyContent: "space-between",
     marginBottom: 14,
   },
-  backBtn: { flexDirection: "row", alignItems: "center", gap: 6, width: 72 },
-  backText: { fontFamily: "Outfit_500Medium", fontSize: 12, color: C.textMuted },
+  backBtn: { flexDirection: "row", alignItems: "center", width: 72 },
+  backText: {
+    marginLeft: 6,
+    fontFamily: "Outfit_500Medium",
+    fontSize: 12,
+    color: C.textMuted,
+  },
   title: { fontFamily: "Outfit_700Bold", fontSize: 18, color: C.text },
 
   saveBtn: {
@@ -183,9 +188,13 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: C.border,
     padding: 16,
-    gap: 10,
   },
-  label: { fontFamily: "Outfit_600SemiBold", fontSize: 12, color: C.textSecondary },
+  label: {
+    marginBottom: 10,
+    fontFamily: "Outfit_600SemiBold",
+    fontSize: 12,
+    color: C.textSecondary,
+  },
   input: {
     borderWidth: 1,
     borderColor: C.border,
@@ -196,6 +205,7 @@ const styles = StyleSheet.create({
     fontFamily: "Outfit_500Medium",
     fontSize: 14,
     color: C.text,
+    marginBottom: 10,
   },
   helper: { fontFamily: "Outfit_400Regular", fontSize: 12, color: C.textMuted, lineHeight: 18 },
 });

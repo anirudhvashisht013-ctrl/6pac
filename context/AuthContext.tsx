@@ -21,6 +21,7 @@ import { reconcileCloudToLocal } from "@/lib/sync/reconcile";
 import { syncNow } from "@/lib/sync/syncNow";
 import { getIsOnline, subscribeNetworkStatus } from "@/lib/network";
 import { ensureExerciseLibraryInitialized } from "@/lib/exercises/libraryService";
+import { ensureMyFriendRefId } from "@/lib/friends/service";
 
 type AppUser = {
   id: string; // Firebase uid
@@ -89,6 +90,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         // Make sure /users/{uid} exists (non-destructive)
         if (email) {
           await ensureUserProfile(uid, email);
+        }
+
+        try {
+          await ensureMyFriendRefId(uid);
+        } catch (e) {
+          console.warn("friend ref id bootstrap failed", e);
         }
 
         // Pull cloud mirror into local cache before app screens start reading local repos.
@@ -167,6 +174,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
     // Ensure profile doc exists
     await ensureUserProfile(uid, userEmail);
+    try {
+      await ensureMyFriendRefId(uid);
+    } catch (e) {
+      console.warn("friend ref id bootstrap failed", e);
+    }
 
     // Update completeness right away
     try {
@@ -187,6 +199,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     const userEmail = (cred.user.email || cleanEmail).trim().toLowerCase();
 
     await ensureUserProfile(uid, userEmail);
+    try {
+      await ensureMyFriendRefId(uid);
+    } catch (e) {
+      console.warn("friend ref id bootstrap failed", e);
+    }
 
     // New user hasn’t completed onboarding yet
     setIsProfileComplete(false);

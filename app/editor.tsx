@@ -102,6 +102,7 @@ export default function EditorScreen() {
 
   const [name, setName] = useState('');
   const [notes, setNotes] = useState('');
+  const [sharedWithFriends, setSharedWithFriends] = useState(true);
   const [blocks, setBlocks] = useState<WorkoutBlock[]>([]);
   const [exercises, setExercises] = useState<ExerciseLibraryItem[]>([]);
   const [loading, setLoading] = useState(true);
@@ -145,10 +146,12 @@ export default function EditorScreen() {
           setName(template.name);
           setNotes(template.notes || '');
           setBlocks(template.blocks);
+          setSharedWithFriends(!!template.sharedWithFriends);
         } else {
           setName('');
           setNotes('');
           setBlocks([]);
+          setSharedWithFriends(true);
         }
 
         setExercises(exerciseLibrary.sort((a, b) => a.name.localeCompare(b.name)));
@@ -172,6 +175,7 @@ export default function EditorScreen() {
         name: name.trim(),
         notes: notes.trim() ? notes.trim() : null,
         blocks,
+        sharedWithFriends,
         createdAt: now,
         updatedAt: now,
       };

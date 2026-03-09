@@ -238,6 +238,22 @@ export default function ProfileHubScreen() {
 
         <Pressable
           style={({ pressed }) => [styles.navRow, pressed && { opacity: 0.9 }]}
+          onPress={() => router.push("/profile-friends" as any)}
+        >
+          <View style={styles.navLeft}>
+            <View style={styles.navIconWrap}>
+              <Ionicons name="people-outline" size={18} color={C.primary} />
+            </View>
+            <View style={{ flex: 1 }}>
+              <Text style={styles.navTitle}>Friends</Text>
+              <Text style={styles.navSub}>Friend ID, requests, shared workouts</Text>
+            </View>
+          </View>
+          <Ionicons name="chevron-forward" size={18} color={C.textMuted} />
+        </Pressable>
+
+        <Pressable
+          style={({ pressed }) => [styles.navRow, pressed && { opacity: 0.9 }]}
           onPress={() => router.push("/exercises" as any)}
         >
           <View style={styles.navLeft}>

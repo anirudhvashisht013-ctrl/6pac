@@ -107,6 +107,7 @@ export interface WorkoutTemplate {
   name: string;
   notes: string | null;
   blocks: WorkoutBlock[];
+  sharedWithFriends?: boolean;
   createdAt: string;
   updatedAt: string;
 }

@@ -4,6 +4,7 @@ import { doc, getDoc, setDoc, serverTimestamp } from "firebase/firestore";
 export type UserProfileDoc = {
   uid: string;
   email: string;
+  friendRefId?: string;
   onboardingDone: boolean;
   fullName?: string;
   dateOfBirth?: string;

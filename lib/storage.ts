@@ -6,6 +6,7 @@ import type {
 } from './types';
 import { cloudMirrorRepo } from "@/lib/repos/cloudMirrorRepo";
 import { measurementDocId, normalizeMeasurementEntry } from "@/lib/measurements/identity";
+import { removeSharedWorkoutTemplate, syncSharedWorkoutTemplate } from "@/lib/friends/sharedWorkoutsRepo";
 import {
   getMeasurementByDate,
   getMeasurementRange,
@@ -58,6 +59,7 @@ function normalizeTemplate(template: WorkoutTemplate): WorkoutTemplate {
   return {
     ...template,
     notes: typeof template.notes === 'string' ? template.notes : null,
+    sharedWithFriends: template.sharedWithFriends !== false,
   };
 }
 
@@ -225,8 +227,23 @@ export const schedulesRepo = {
 
 export const workoutsRepo = {
   async getAll(uid: string): Promise<WorkoutTemplate[]> {
-    const templates = (await get<WorkoutTemplate[]>(KEY.templates(uid))) || [];
-    return templates.map(normalizeTemplate);
+    const raw = (await get<WorkoutTemplate[]>(KEY.templates(uid))) || [];
+    const normalized = raw.map(normalizeTemplate);
+
+    const changed = normalized.filter((template, idx) => {
+      const before = raw[idx];
+      return !before || typeof before.sharedWithFriends !== "boolean";
+    });
+
+    if (changed.length > 0) {
+      await set(KEY.templates(uid), normalized);
+      changed.forEach((template) => {
+        mirrorBestEffort(cloudMirrorRepo.upsertTemplate(uid, template), `templates/${template.id}:share-default`);
+        mirrorBestEffort(syncSharedWorkoutTemplate(uid, template), `shared_workouts/${template.id}:share-default`);
+      });
+    }
+
+    return normalized;
   },
   async getById(uid: string, id: string): Promise<WorkoutTemplate | null> {
     const all = await this.getAll(uid);
@@ -241,12 +258,14 @@ export const workoutsRepo = {
     await set(KEY.templates(uid), all);
     emitDataEvent(uid, "workouts");
     mirrorBestEffort(cloudMirrorRepo.upsertTemplate(uid, normalizedTemplate), `templates/${normalizedTemplate.id}`);
+    mirrorBestEffort(syncSharedWorkoutTemplate(uid, normalizedTemplate), `shared_workouts/${normalizedTemplate.id}`);
   },
   async delete(uid: string, id: string): Promise<void> {
     const all = await this.getAll(uid);
     await set(KEY.templates(uid), all.filter(t => t.id !== id));
     emitDataEvent(uid, "workouts");
     mirrorBestEffort(cloudMirrorRepo.deleteTemplate(uid, id), `templates/${id}:delete`);
+    mirrorBestEffort(removeSharedWorkoutTemplate(uid, id), `shared_workouts/${id}:delete`);
   },
 };
 

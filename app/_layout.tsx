@@ -75,6 +75,9 @@ function RootLayoutNav() {
       <Stack.Screen name="measurements" options={{ presentation: "modal", headerShown: false }} />
       <Stack.Screen name="profile-progress" options={{ headerShown: false }} />
       <Stack.Screen name="profile-measurements" options={{ headerShown: false }} />
+      <Stack.Screen name="profile-friends" options={{ headerShown: false }} />
+      <Stack.Screen name="profile-friend-workouts" options={{ headerShown: false }} />
+      <Stack.Screen name="profile-friend-workouts-list" options={{ headerShown: false }} />
       <Stack.Screen name="reminders-settings" options={{ headerShown: false }} />
       <Stack.Screen name="exercises" options={{ headerShown: false }} />
       <Stack.Screen name="edit-profile" options={{ presentation: "modal", headerShown: false }} />

@@ -1,5 +1,5 @@
 // lib/repos/measurementsRepo.ts
-import { db } from "@/lib/firebase";
+import { getFirebaseDb } from "@/lib/firebase";
 import {
   collection,
   doc,
@@ -16,8 +16,8 @@ import type { BodyMeasurementEntry as MirrorMeasurementEntry } from "@/lib/types
 import { cloudMirrorRepo } from "@/lib/repos/cloudMirrorRepo";
 import { parseTimestampDate } from "@/lib/measurements/slots";
 
-const ref = (uid: string, date: ISODate) => doc(db, "users", uid, "measurements", date);
-const col = (uid: string) => collection(db, "users", uid, "measurements");
+const ref = (uid: string, date: ISODate) => doc(getFirebaseDb(), "users", uid, "measurements", date);
+const col = (uid: string) => collection(getFirebaseDb(), "users", uid, "measurements");
 
 function mirrorBestEffort(task: Promise<void>, label: string) {
   void task.catch((err) => {

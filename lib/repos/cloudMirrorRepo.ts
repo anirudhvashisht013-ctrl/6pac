@@ -1,4 +1,4 @@
-import { db } from "@/lib/firebase";
+import { getFirebaseDb } from "@/lib/firebase";
 import {
   collection,
   getDocs,
@@ -110,9 +110,9 @@ export const cloudMirrorRepo = {
   },
 
   async clearCollection(uid: string, collectionName: string): Promise<void> {
-    const snaps = await getDocs(collection(db, "users", uid, collectionName));
+    const snaps = await getDocs(collection(getFirebaseDb(), "users", uid, collectionName));
     if (snaps.empty) return;
-    const batch = writeBatch(db);
+    const batch = writeBatch(getFirebaseDb());
     snaps.forEach((snap) => batch.delete(snap.ref));
     await batch.commit();
   },

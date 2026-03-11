@@ -1,13 +1,13 @@
-// app/_layout.tsx
 import { QueryClientProvider } from "@tanstack/react-query";
 import { Stack, router } from "expo-router";
 import * as SplashScreen from "expo-splash-screen";
-import React, { useEffect } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import { GestureHandlerRootView } from "react-native-gesture-handler";
 import { SafeAreaProvider } from "react-native-safe-area-context";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
 import FeedbackToastHost from "@/components/FeedbackToastHost";
 import SubtleSplash from "@/components/SubtleSplash";
+import StartupFailureState from "@/components/StartupFailureState";
 import { queryClient } from "@/lib/query-client";
 import { AuthProvider, useAuth } from "@/context/AuthContext";
 import { FeedbackToastProvider } from "@/context/FeedbackToastContext";
@@ -20,16 +20,53 @@ import {
   useFonts,
 } from "@expo-google-fonts/outfit";
 import { C } from "@/constants/colors";
-import { initializeFirestoreOffline } from "@/lib/firebase";
+import {
+  getFirebaseBootstrapDiagnostics,
+  initializeFirebase,
+  initializeFirestoreOffline,
+} from "@/lib/firebase";
 import { initializeMirrorQueue } from "@/lib/sync/mirrorQueue";
+import { installGlobalErrorCapture } from "@/lib/bootstrap/globalError";
+import { logBoot, logError } from "@/lib/bootstrap/logger";
 
 // keep the native splash open until we've finished preparing JS state
 SplashScreen.preventAutoHideAsync();
 
+type RootBootState =
+  | { status: "booting" }
+  | { status: "ready" }
+  | { status: "failed"; message: string; details?: string };
+
+function formatFailureDetails(error: unknown): string {
+  const diagnostics = getFirebaseBootstrapDiagnostics();
+  const lines = [
+    `status: ${diagnostics.status}`,
+    `step: ${diagnostics.step}`,
+    `source: ${diagnostics.source}`,
+    diagnostics.errorMessage ? `error: ${diagnostics.errorMessage}` : "error: unknown",
+  ];
+
+  if (diagnostics.issues.length > 0) {
+    lines.push("issues:");
+    for (const issue of diagnostics.issues) {
+      lines.push(`- ${issue.key}: ${issue.reason}`);
+    }
+  }
+
+  if (error instanceof Error && error.stack) {
+    lines.push("stack:");
+    lines.push(error.stack);
+  }
+
+  return lines.join("\n");
+}
+
 function RootLayoutNav() {
   const { user, isLoading, isProfileComplete } = useAuth();
+  const appReadyLoggedRef = useRef(false);
 
   useEffect(() => {
+    logBoot("App shell / first screen load started");
     initializeMirrorQueue();
 
     let unsubFirestore: (() => void) | undefined;
@@ -43,8 +80,8 @@ function RootLayoutNav() {
         }
         unsubFirestore = unsub;
       })
-      .catch((err) => {
-        console.warn("Firestore offline initialization failed", err);
+      .catch((error) => {
+        logError("Firestore offline initialization failed", error);
       });
 
     return () => {
@@ -56,7 +93,12 @@ function RootLayoutNav() {
   useEffect(() => {
     if (isLoading) return;
 
-    SplashScreen.hideAsync();
+    void SplashScreen.hideAsync();
+
+    if (!appReadyLoggedRef.current) {
+      appReadyLoggedRef.current = true;
+      logBoot("App ready");
+    }
 
     if (!user) router.replace("/(auth)/login");
     else if (!isProfileComplete) router.replace("/(auth)/onboarding");
@@ -93,7 +135,63 @@ export default function RootLayout() {
     Outfit_700Bold,
   });
 
-  if (!fontsLoaded) return <SubtleSplash />;
+  const [bootState, setBootState] = useState<RootBootState>({ status: "booting" });
+
+  useEffect(() => {
+    logBoot("App startup initiated");
+    installGlobalErrorCapture();
+
+    let cancelled = false;
+
+    void (async () => {
+      try {
+        const result = await initializeFirebase();
+        if (cancelled) return;
+
+        if (!result.ok) {
+          logError("Firebase startup failed", result.error, {
+            step: result.diagnostics.step,
+            source: result.diagnostics.source,
+          });
+          setBootState({
+            status: "failed",
+            message: "Firebase configuration is invalid. Check environment variables and runtime config.",
+            details: __DEV__ ? formatFailureDetails(result.error) : undefined,
+          });
+          return;
+        }
+
+        setBootState({ status: "ready" });
+        logBoot("Firebase startup completed");
+      } catch (error) {
+        if (cancelled) return;
+
+        logError("Fatal startup error while bootstrapping Firebase", error);
+        setBootState({
+          status: "failed",
+          message: "Firebase configuration is invalid. Check environment variables and runtime config.",
+          details: __DEV__ ? formatFailureDetails(error) : undefined,
+        });
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!fontsLoaded) return;
+    if (bootState.status !== "failed") return;
+
+    void SplashScreen.hideAsync();
+  }, [fontsLoaded, bootState.status]);
+
+  if (!fontsLoaded || bootState.status === "booting") return <SubtleSplash />;
+
+  if (bootState.status === "failed") {
+    return <StartupFailureState message={bootState.message} details={bootState.details} />;
+  }
 
   return (
     <ErrorBoundary>

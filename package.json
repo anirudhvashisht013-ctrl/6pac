@@ -12,6 +12,10 @@
     "server:prod": "NODE_ENV=production node server_dist/index.js",
     "db:push": "drizzle-kit push",
     "test:unit": "node --import tsx --test \"lib/**/*.test.ts\"",
+    "validate:firebase-config": "node scripts/validateFirebaseConfig.mjs",
+    "validate:firebase-config:prod": "node scripts/validateFirebaseConfig.mjs --env=production",
+    "prebuild:android": "npm run validate:firebase-config:prod",
+    "eas:build:android": "npm run prebuild:android && npx eas build --platform android --profile production",
     "start": "npx expo start",
     "lint": "npx expo lint",
     "lint:fix": "npx expo lint --fix"

@@ -1,4 +1,4 @@
-import { db } from "@/lib/firebase";
+import { getFirebaseDb } from "@/lib/firebase";
 import { doc, getDoc, setDoc, serverTimestamp } from "firebase/firestore";
 
 export type UserProfileDoc = {
@@ -19,7 +19,7 @@ export type UserProfileDoc = {
   maxStreakDays?: number;
 };
 
-const userDocRef = (uid: string) => doc(db, "users", uid);
+const userDocRef = (uid: string) => doc(getFirebaseDb(), "users", uid);
 
 export async function getUserProfile(uid: string): Promise<UserProfileDoc | null> {
   const snap = await getDoc(userDocRef(uid));

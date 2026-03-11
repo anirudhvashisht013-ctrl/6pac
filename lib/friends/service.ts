@@ -14,7 +14,7 @@ import {
   type Unsubscribe,
   where,
 } from "firebase/firestore";
-import { db } from "@/lib/firebase";
+import { getFirebaseDb } from "@/lib/firebase";
 import { workoutsRepo } from "@/lib/storage";
 import type { WorkoutTemplate } from "@/lib/types";
 import { generateFriendRefId, isValidFriendRefId, normalizeFriendRefId } from "@/lib/friends/id";
@@ -130,7 +130,7 @@ function normalizeRefFromUnknown(raw: unknown): string | null {
 }
 
 async function getUserSummary(uid: string): Promise<FriendUserSummary> {
-  const profileSnap = await getDoc(doc(db, "users", uid));
+  const profileSnap = await getDoc(doc(getFirebaseDb(), "users", uid));
   const profile = (profileSnap.data() || {}) as Record<string, unknown>;
 
   return {
@@ -296,19 +296,19 @@ async function buildDashboardFromDocs(
 }
 
 export async function ensureMyFriendRefId(uid: string): Promise<string> {
-  const userRef = doc(db, "users", uid);
+  const userRef = doc(getFirebaseDb(), "users", uid);
 
   for (let attempt = 0; attempt < 12; attempt += 1) {
     const candidate = generateFriendRefId();
 
     try {
-      const claimed = await runTransaction(db, async (tx) => {
+      const claimed = await runTransaction(getFirebaseDb(), async (tx) => {
         const userSnap = await tx.get(userRef);
         const profile = (userSnap.data() || {}) as Record<string, unknown>;
         const existing = normalizeRefFromUnknown(profile.friendRefId);
 
         if (existing) {
-          const existingRef = doc(db, FRIEND_REFS_COLLECTION, existing);
+          const existingRef = doc(getFirebaseDb(), FRIEND_REFS_COLLECTION, existing);
           const existingRefSnap = await tx.get(existingRef);
           const existingOwner = (existingRefSnap.data() as { uid?: unknown } | undefined)?.uid;
 
@@ -340,7 +340,7 @@ export async function ensureMyFriendRefId(uid: string): Promise<string> {
           }
         }
 
-        const friendRef = doc(db, FRIEND_REFS_COLLECTION, candidate);
+        const friendRef = doc(getFirebaseDb(), FRIEND_REFS_COLLECTION, candidate);
         const friendRefSnap = await tx.get(friendRef);
         const ownerUid = (friendRefSnap.data() as { uid?: unknown } | undefined)?.uid;
 
@@ -388,7 +388,7 @@ export async function searchUserByFriendRefId(currentUid: string, rawValue: stri
     return { ok: false, code: "invalid_id" };
   }
 
-  const snap = await getDoc(doc(db, FRIEND_REFS_COLLECTION, normalized));
+  const snap = await getDoc(doc(getFirebaseDb(), FRIEND_REFS_COLLECTION, normalized));
   if (!snap.exists()) {
     return { ok: false, code: "not_found" };
   }
@@ -425,9 +425,9 @@ export async function sendFriendRequestByRefId(
   ]);
 
   try {
-    await runTransaction(db, async (tx) => {
-      const requestRef = doc(db, FRIEND_REQUESTS_COLLECTION, pairKey);
-      const friendshipRef = doc(db, FRIENDSHIPS_COLLECTION, pairKey);
+    await runTransaction(getFirebaseDb(), async (tx) => {
+      const requestRef = doc(getFirebaseDb(), FRIEND_REQUESTS_COLLECTION, pairKey);
+      const friendshipRef = doc(getFirebaseDb(), FRIENDSHIPS_COLLECTION, pairKey);
 
       const [requestSnap, friendshipSnap] = await Promise.all([tx.get(requestRef), tx.get(friendshipRef)]);
 
@@ -485,8 +485,8 @@ export async function sendFriendRequestByRefId(
 
 export async function acceptFriendRequest(currentUid: string, pairKey: string): Promise<FriendActionResult> {
   try {
-    await runTransaction(db, async (tx) => {
-      const requestRef = doc(db, FRIEND_REQUESTS_COLLECTION, pairKey);
+    await runTransaction(getFirebaseDb(), async (tx) => {
+      const requestRef = doc(getFirebaseDb(), FRIEND_REQUESTS_COLLECTION, pairKey);
       const requestSnap = await tx.get(requestRef);
 
       if (!requestSnap.exists()) {
@@ -498,7 +498,7 @@ export async function acceptFriendRequest(currentUid: string, pairKey: string): 
         throw new Error("invalid_state");
       }
 
-      const friendshipRef = doc(db, FRIENDSHIPS_COLLECTION, pairKey);
+      const friendshipRef = doc(getFirebaseDb(), FRIENDSHIPS_COLLECTION, pairKey);
       const [userAUid, userBUid] = [request.requesterUid, request.receiverUid].sort();
 
       tx.set(
@@ -536,8 +536,8 @@ export async function acceptFriendRequest(currentUid: string, pairKey: string): 
 
 export async function declineFriendRequest(currentUid: string, pairKey: string): Promise<FriendActionResult> {
   try {
-    await runTransaction(db, async (tx) => {
-      const requestRef = doc(db, FRIEND_REQUESTS_COLLECTION, pairKey);
+    await runTransaction(getFirebaseDb(), async (tx) => {
+      const requestRef = doc(getFirebaseDb(), FRIEND_REQUESTS_COLLECTION, pairKey);
       const requestSnap = await tx.get(requestRef);
 
       if (!requestSnap.exists()) {
@@ -571,8 +571,8 @@ export async function declineFriendRequest(currentUid: string, pairKey: string):
 
 export async function cancelSentFriendRequest(currentUid: string, pairKey: string): Promise<FriendActionResult> {
   try {
-    await runTransaction(db, async (tx) => {
-      const requestRef = doc(db, FRIEND_REQUESTS_COLLECTION, pairKey);
+    await runTransaction(getFirebaseDb(), async (tx) => {
+      const requestRef = doc(getFirebaseDb(), FRIEND_REQUESTS_COLLECTION, pairKey);
       const requestSnap = await tx.get(requestRef);
 
       if (!requestSnap.exists()) {
@@ -608,9 +608,9 @@ export async function removeFriend(currentUid: string, friendUid: string): Promi
   const pairKey = pairKeyFor(currentUid, friendUid);
 
   try {
-    await runTransaction(db, async (tx) => {
-      const friendshipRef = doc(db, FRIENDSHIPS_COLLECTION, pairKey);
-      const requestRef = doc(db, FRIEND_REQUESTS_COLLECTION, pairKey);
+    await runTransaction(getFirebaseDb(), async (tx) => {
+      const friendshipRef = doc(getFirebaseDb(), FRIENDSHIPS_COLLECTION, pairKey);
+      const requestRef = doc(getFirebaseDb(), FRIEND_REQUESTS_COLLECTION, pairKey);
 
       const [friendshipSnap, requestSnap] = await Promise.all([tx.get(friendshipRef), tx.get(requestRef)]);
 
@@ -648,10 +648,10 @@ export async function loadFriendsDashboard(uid: string): Promise<FriendsDashboar
     const myFriendRefId = await ensureMyFriendRefId(uid);
 
     const [incomingSnap, sentSnap, friendshipsSnap, copyEventsSnap] = await Promise.all([
-      getDocs(query(collection(db, FRIEND_REQUESTS_COLLECTION), where("receiverUid", "==", uid))),
-      getDocs(query(collection(db, FRIEND_REQUESTS_COLLECTION), where("requesterUid", "==", uid))),
-      getDocs(query(collection(db, FRIENDSHIPS_COLLECTION), where("memberUids", "array-contains", uid))),
-      getDocs(query(collection(db, SHARED_WORKOUT_COPIES_COLLECTION), where("ownerUid", "==", uid))),
+      getDocs(query(collection(getFirebaseDb(), FRIEND_REQUESTS_COLLECTION), where("receiverUid", "==", uid))),
+      getDocs(query(collection(getFirebaseDb(), FRIEND_REQUESTS_COLLECTION), where("requesterUid", "==", uid))),
+      getDocs(query(collection(getFirebaseDb(), FRIENDSHIPS_COLLECTION), where("memberUids", "array-contains", uid))),
+      getDocs(query(collection(getFirebaseDb(), SHARED_WORKOUT_COPIES_COLLECTION), where("ownerUid", "==", uid))),
     ]);
 
     const incomingDocs = incomingSnap.docs
@@ -721,7 +721,7 @@ export function subscribeFriendsDashboard(
   };
 
   const unsubIncoming = onSnapshot(
-    query(collection(db, FRIEND_REQUESTS_COLLECTION), where("receiverUid", "==", uid)),
+    query(collection(getFirebaseDb(), FRIEND_REQUESTS_COLLECTION), where("receiverUid", "==", uid)),
     (snap) => {
       hasIncoming = true;
       incomingDocs = snap.docs
@@ -733,7 +733,7 @@ export function subscribeFriendsDashboard(
   );
 
   const unsubSent = onSnapshot(
-    query(collection(db, FRIEND_REQUESTS_COLLECTION), where("requesterUid", "==", uid)),
+    query(collection(getFirebaseDb(), FRIEND_REQUESTS_COLLECTION), where("requesterUid", "==", uid)),
     (snap) => {
       hasSent = true;
       sentDocs = snap.docs
@@ -745,7 +745,7 @@ export function subscribeFriendsDashboard(
   );
 
   const unsubFriendships = onSnapshot(
-    query(collection(db, FRIENDSHIPS_COLLECTION), where("memberUids", "array-contains", uid)),
+    query(collection(getFirebaseDb(), FRIENDSHIPS_COLLECTION), where("memberUids", "array-contains", uid)),
     (snap) => {
       hasFriendships = true;
       friendshipDocs = snap.docs.map((d) => d.data() as FriendshipDoc);
@@ -755,7 +755,7 @@ export function subscribeFriendsDashboard(
   );
 
   const unsubCopyEvents = onSnapshot(
-    query(collection(db, SHARED_WORKOUT_COPIES_COLLECTION), where("ownerUid", "==", uid)),
+    query(collection(getFirebaseDb(), SHARED_WORKOUT_COPIES_COLLECTION), where("ownerUid", "==", uid)),
     (snap) => {
       hasCopyEvents = true;
       copyEvents = snap.docs.map((d) => d.data() as SharedWorkoutCopyDoc);
@@ -778,11 +778,11 @@ export async function loadFriendSharedWorkouts(
   friendUid: string
 ): Promise<SharedWorkoutView[]> {
   const pairKey = pairKeyFor(currentUid, friendUid);
-  const friendshipSnap = await getDoc(doc(db, FRIENDSHIPS_COLLECTION, pairKey));
+  const friendshipSnap = await getDoc(doc(getFirebaseDb(), FRIENDSHIPS_COLLECTION, pairKey));
   if (!friendshipSnap.exists()) return [];
 
   const snaps = await getDocs(
-    query(collection(db, SHARED_WORKOUTS_COLLECTION), where("ownerUid", "==", friendUid))
+    query(collection(getFirebaseDb(), SHARED_WORKOUTS_COLLECTION), where("ownerUid", "==", friendUid))
   );
 
   const shared = snaps.docs
@@ -812,7 +812,7 @@ export async function copySharedWorkoutToMyAccount(
   sharedWorkout: SharedWorkoutView
 ): Promise<WorkoutTemplate> {
   const copyEventRef = doc(
-    db,
+    getFirebaseDb(),
     SHARED_WORKOUT_COPIES_COLLECTION,
     copyEventDocId(sharedWorkout.ownerUid, uid, sharedWorkout.templateId)
   );
@@ -854,7 +854,7 @@ export async function copySharedWorkoutToMyAccount(
 
 export async function loadCopiedTemplateIdsFromOwner(copierUid: string, ownerUid: string): Promise<Set<string>> {
   const snaps = await getDocs(
-    query(collection(db, SHARED_WORKOUT_COPIES_COLLECTION), where("ownerUid", "==", ownerUid))
+    query(collection(getFirebaseDb(), SHARED_WORKOUT_COPIES_COLLECTION), where("ownerUid", "==", ownerUid))
   );
 
   const copiedIds = new Set<string>();
@@ -869,5 +869,5 @@ export async function loadCopiedTemplateIdsFromOwner(copierUid: string, ownerUid
 }
 
 export async function removeStaleSharedWorkoutDoc(ownerUid: string, templateId: string): Promise<void> {
-  await deleteDoc(doc(db, SHARED_WORKOUTS_COLLECTION, `${ownerUid}__${templateId}`));
+  await deleteDoc(doc(getFirebaseDb(), SHARED_WORKOUTS_COLLECTION, `${ownerUid}__${templateId}`));
 }

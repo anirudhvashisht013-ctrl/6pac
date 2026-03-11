@@ -1,5 +1,5 @@
 // lib/repos/mealsRepo.ts
-import { db } from "@/lib/firebase";
+import { getFirebaseDb } from "@/lib/firebase";
 import {
   collection,
   doc,
@@ -15,10 +15,10 @@ import { daysRepo } from "@/lib/repos/daysRepo";
 import { n0 } from "@/lib/math";
 
 const mealsCol = (uid: string, date: ISODate) =>
-  collection(db, "users", uid, "days", date, "meals");
+  collection(getFirebaseDb(), "users", uid, "days", date, "meals");
 
 const mealRef = (uid: string, date: ISODate, mealId: string) =>
-  doc(db, "users", uid, "days", date, "meals", mealId);
+  doc(getFirebaseDb(), "users", uid, "days", date, "meals", mealId);
 
 async function recomputeDayMacrosFromMeals(
   uid: string,

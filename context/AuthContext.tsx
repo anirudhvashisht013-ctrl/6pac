@@ -13,7 +13,6 @@ import {
   createUserWithEmailAndPassword,
   signOut,
   type FirebaseUser,
-  auth,
 } from "@/lib/firebase";
 import { ensureUserProfile, getUserProfile, markOnboardingDone } from "@/lib/userProfile";
 import { ensureAutoBackupOnce } from "@/lib/backup/autoBackupOnce";
@@ -22,6 +21,7 @@ import { syncNow } from "@/lib/sync/syncNow";
 import { getIsOnline, subscribeNetworkStatus } from "@/lib/network";
 import { ensureExerciseLibraryInitialized } from "@/lib/exercises/libraryService";
 import { ensureMyFriendRefId } from "@/lib/friends/service";
+import { logError, logFirebase } from "@/lib/bootstrap/logger";
 
 type AppUser = {
   id: string; // Firebase uid
@@ -68,68 +68,80 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     let cancelled = false;
+    let unsub: (() => void) | null = null;
 
-    const unsub = onAuthStateChanged(auth, async (fbUser) => {
-      if (cancelled) return;
+    logFirebase("Auth session restore started");
 
-      setIsLoading(true);
+    try {
+      unsub = onAuthStateChanged(async (fbUser) => {
+        if (cancelled) return;
 
-      if (!fbUser) {
-        setUser(null);
-        setIsProfileComplete(false);
-        setIsLoading(false);
-        return;
-      }
+        setIsLoading(true);
 
-      const uid = fbUser.uid;
-      const email = (fbUser.email || "").trim().toLowerCase();
-
-      setUser({ id: uid, email });
-
-      try {
-        // Make sure /users/{uid} exists (non-destructive)
-        if (email) {
-          await ensureUserProfile(uid, email);
+        if (!fbUser) {
+          logFirebase("Auth state resolved with no active user");
+          setUser(null);
+          setIsProfileComplete(false);
+          setIsLoading(false);
+          return;
         }
+
+        const uid = fbUser.uid;
+        const email = (fbUser.email || "").trim().toLowerCase();
+        logFirebase("Auth state resolved with active user", { uid });
+
+        setUser({ id: uid, email });
 
         try {
-          await ensureMyFriendRefId(uid);
-        } catch (e) {
-          console.warn("friend ref id bootstrap failed", e);
+          // Make sure /users/{uid} exists (non-destructive)
+          if (email) {
+            await ensureUserProfile(uid, email);
+          }
+
+          try {
+            await ensureMyFriendRefId(uid);
+          } catch (error) {
+            logError("Friend ref id bootstrap failed", error, { uid });
+          }
+
+          // Pull cloud mirror into local cache before app screens start reading local repos.
+          try {
+            await reconcileCloudToLocal(uid);
+          } catch (error) {
+            logError("Cloud to local reconcile failed", error, { uid });
+          }
+
+          try {
+            await ensureExerciseLibraryInitialized(uid);
+          } catch (error) {
+            logError("Exercise library bootstrap failed", error, { uid });
+          }
+
+          // Read profile to determine onboardingDone
+          const profile = await getUserProfile(uid);
+          setIsProfileComplete(!!profile?.onboardingDone);
+
+          // Fire-and-forget: run once per user/device after login restore.
+          void ensureAutoBackupOnce(uid).catch((error) => {
+            logError("Auto backup failed", error, { uid });
+          });
+        } catch (error) {
+          // If Firestore fails, do not assume complete
+          logError("Auth bootstrap dependent calls failed", error, { uid });
+          setIsProfileComplete(false);
+        } finally {
+          setIsLoading(false);
         }
-
-        // Pull cloud mirror into local cache before app screens start reading local repos.
-        try {
-          await reconcileCloudToLocal(uid);
-        } catch (e) {
-          console.warn("cloud->local reconcile failed", e);
-        }
-
-        try {
-          await ensureExerciseLibraryInitialized(uid);
-        } catch (e) {
-          console.warn("exercise library bootstrap failed", e);
-        }
-
-        // Read profile to determine onboardingDone
-        const profile = await getUserProfile(uid);
-        setIsProfileComplete(!!profile?.onboardingDone);
-
-        // Fire-and-forget: run once per user/device after login restore.
-        void ensureAutoBackupOnce(uid).catch((e) => {
-          console.warn("auto backup failed", e);
-        });
-      } catch {
-        // If Firestore fails, do not assume complete
-        setIsProfileComplete(false);
-      } finally {
-        setIsLoading(false);
-      }
-    });
+      });
+    } catch (error) {
+      logError("Auth state listener attachment failed", error);
+      setIsProfileComplete(false);
+      setIsLoading(false);
+    }
 
     return () => {
       cancelled = true;
-      unsub();
+      unsub?.();
     };
   }, []);
 
@@ -137,14 +149,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     const uid = user?.id;
     if (!uid) return;
 
-    void syncNow(uid).catch((err) => {
-      console.warn("initial sync failed", err);
+    void syncNow(uid).catch((error) => {
+      logError("Initial sync failed", error, { uid });
     });
 
     const reconcileIfOnline = () => {
       if (!getIsOnline()) return;
-      void reconcileCloudToLocal(uid).catch((e) => {
-        console.warn("reconcile on reconnect failed", e);
+      void reconcileCloudToLocal(uid).catch((error) => {
+        logError("Reconcile on reconnect failed", error, { uid });
       });
     };
 
@@ -167,7 +179,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const login = async (email: string, password: string): Promise<FirebaseUser> => {
     const cleanEmail = email.trim().toLowerCase();
-    const cred = await signInWithEmailAndPassword(auth, cleanEmail, password);
+    const cred = await signInWithEmailAndPassword(cleanEmail, password);
 
     const uid = cred.user.uid;
     const userEmail = (cred.user.email || cleanEmail).trim().toLowerCase();
@@ -176,8 +188,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     await ensureUserProfile(uid, userEmail);
     try {
       await ensureMyFriendRefId(uid);
-    } catch (e) {
-      console.warn("friend ref id bootstrap failed", e);
+    } catch (error) {
+      logError("Friend ref id bootstrap failed after login", error, { uid });
     }
 
     // Update completeness right away
@@ -193,7 +205,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const signUp = async (email: string, password: string): Promise<FirebaseUser> => {
     const cleanEmail = email.trim().toLowerCase();
-    const cred = await createUserWithEmailAndPassword(auth, cleanEmail, password);
+    const cred = await createUserWithEmailAndPassword(cleanEmail, password);
 
     const uid = cred.user.uid;
     const userEmail = (cred.user.email || cleanEmail).trim().toLowerCase();
@@ -201,8 +213,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     await ensureUserProfile(uid, userEmail);
     try {
       await ensureMyFriendRefId(uid);
-    } catch (e) {
-      console.warn("friend ref id bootstrap failed", e);
+    } catch (error) {
+      logError("Friend ref id bootstrap failed after signup", error, { uid });
     }
 
     // New user hasn’t completed onboarding yet
@@ -212,7 +224,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   };
 
   const logout = async () => {
-    await signOut(auth);
+    await signOut();
     setUser(null);
     setIsProfileComplete(false);
   };

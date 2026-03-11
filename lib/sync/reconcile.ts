@@ -1,6 +1,6 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { Timestamp, collection, getDocs, query, where } from "firebase/firestore";
-import { db } from "@/lib/firebase";
+import { getFirebaseDb } from "@/lib/firebase";
 import {
   localCacheRepo,
   type LocalDataSnapshot,
@@ -146,7 +146,7 @@ async function fetchMirrorCollection<T extends object>(
   name: Exclude<MirrorCollectionName, "tombstones_v1">,
   cursorIso?: string
 ): Promise<FetchResult<T>> {
-  const col = collection(db, "users", uid, name);
+  const col = collection(getFirebaseDb(), "users", uid, name);
   const cursorMs = cursorIso ? Date.parse(cursorIso) : Number.NaN;
 
   const snaps =
@@ -176,7 +176,7 @@ async function fetchTombstones(
   uid: string,
   cursorIso?: string
 ): Promise<FetchResult<TombstoneDoc>> {
-  const col = collection(db, "users", uid, "tombstones_v1");
+  const col = collection(getFirebaseDb(), "users", uid, "tombstones_v1");
   const snaps =
     cursorIso
       ? await getDocs(query(col, where("deletedAt", ">", cursorIso)))

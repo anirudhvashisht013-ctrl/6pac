@@ -1,4 +1,4 @@
-import { db } from "@/lib/firebase";
+import { getFirebaseDb } from "@/lib/firebase";
 import type { WorkoutTemplate } from "@/lib/types";
 import { deleteDoc, doc, serverTimestamp, setDoc } from "firebase/firestore";
 
@@ -12,7 +12,7 @@ export async function syncSharedWorkoutTemplate(
   ownerUid: string,
   template: WorkoutTemplate
 ): Promise<void> {
-  const ref = doc(db, SHARED_WORKOUTS_COLLECTION, sharedWorkoutDocId(ownerUid, template.id));
+  const ref = doc(getFirebaseDb(), SHARED_WORKOUTS_COLLECTION, sharedWorkoutDocId(ownerUid, template.id));
 
   if (!template.sharedWithFriends) {
     await deleteDoc(ref);
@@ -34,6 +34,6 @@ export async function syncSharedWorkoutTemplate(
 }
 
 export async function removeSharedWorkoutTemplate(ownerUid: string, templateId: string): Promise<void> {
-  const ref = doc(db, SHARED_WORKOUTS_COLLECTION, sharedWorkoutDocId(ownerUid, templateId));
+  const ref = doc(getFirebaseDb(), SHARED_WORKOUTS_COLLECTION, sharedWorkoutDocId(ownerUid, templateId));
   await deleteDoc(ref);
 }

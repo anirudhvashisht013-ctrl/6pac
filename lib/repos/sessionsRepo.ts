@@ -1,5 +1,5 @@
 // lib/repos/sessionsRepo.ts
-import { db } from "@/lib/firebase";
+import { getFirebaseDb } from "@/lib/firebase";
 import {
   collection,
   doc,
@@ -14,8 +14,8 @@ import type { ISODate, WorkoutSession, DailySnapshot } from "@/lib/models";
 import { daysRepo } from "@/lib/repos/daysRepo";
 import { n0 } from "@/lib/math";
 
-const sessionsCol = (uid: string) => collection(db, "users", uid, "sessions");
-const sessionRef = (uid: string, id: string) => doc(db, "users", uid, "sessions", id);
+const sessionsCol = (uid: string) => collection(getFirebaseDb(), "users", uid, "sessions");
+const sessionRef = (uid: string, id: string) => doc(getFirebaseDb(), "users", uid, "sessions", id);
 
 async function recomputeDayWorkoutSummary(
   uid: string,

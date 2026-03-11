@@ -1,5 +1,5 @@
 // lib/repos/daysRepo.ts
-import { db } from "@/lib/firebase";
+import { getFirebaseDb } from "@/lib/firebase";
 import {
   collection,
   doc,
@@ -12,8 +12,8 @@ import {
 } from "firebase/firestore";
 import type { DailySnapshot, ISODate } from "@/lib/models";
 
-const dayRef = (uid: string, date: ISODate) => doc(db, "users", uid, "days", date);
-const daysCol = (uid: string) => collection(db, "users", uid, "days");
+const dayRef = (uid: string, date: ISODate) => doc(getFirebaseDb(), "users", uid, "days", date);
+const daysCol = (uid: string) => collection(getFirebaseDb(), "users", uid, "days");
 
 export const daysRepo = {
   async getByDate(uid: string, date: ISODate): Promise<DailySnapshot | null> {

@@ -1,107 +1,130 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { Platform } from "react-native";
-import { getApp, getApps, initializeApp, type FirebaseOptions } from "firebase/app";
+import { getApp, getApps, initializeApp, type FirebaseApp } from "firebase/app";
 import * as FirebaseAuth from "firebase/auth";
 import {
   disableNetwork,
   enableIndexedDbPersistence,
   enableNetwork,
   getFirestore,
+  type Firestore,
 } from "firebase/firestore";
+import { getStorage, type FirebaseStorage } from "firebase/storage";
 import { getIsOnline, startNetworkListener, subscribeNetworkStatus } from "@/lib/network";
+import {
+  buildFirebaseConfigSummary,
+  formatFirebaseValidationIssues,
+  validateFirebaseConfig,
+  type FirebaseConfigIssue,
+  type FirebaseConfigSource,
+  type FirebaseRuntimeConfig,
+} from "@/lib/config/firebaseConfig";
+import { loadRuntimeConfig } from "@/lib/config/runtimeConfig";
+import { logConfig, logError, logFirebase } from "@/lib/bootstrap/logger";
 
-const rawFirebaseConfig = {
-  apiKey: process.env.EXPO_PUBLIC_FIREBASE_API_KEY,
-  authDomain: process.env.EXPO_PUBLIC_FIREBASE_AUTH_DOMAIN,
-  projectId: process.env.EXPO_PUBLIC_FIREBASE_PROJECT_ID,
-  storageBucket: process.env.EXPO_PUBLIC_FIREBASE_STORAGE_BUCKET,
-  messagingSenderId: process.env.EXPO_PUBLIC_FIREBASE_MESSAGING_SENDER_ID,
-  appId: process.env.EXPO_PUBLIC_FIREBASE_APP_ID,
-} as const;
+type FirebaseBootstrapStep =
+  | "idle"
+  | "runtime-config"
+  | "config-validate"
+  | "app-init"
+  | "auth-init"
+  | "firestore-init"
+  | "storage-init"
+  | "ready"
+  | "failed";
 
-function isMissingFirebaseEnv(value: string | undefined): boolean {
-  const normalized = value?.trim() ?? "";
-  const lowered = normalized.toLowerCase();
+type FirebaseBootstrapStatus = "idle" | "initializing" | "ready" | "failed";
 
-  return !normalized || lowered === "undefined" || lowered === "null";
-}
+export type FirebaseBootstrapDiagnostics = {
+  status: FirebaseBootstrapStatus;
+  step: FirebaseBootstrapStep;
+  source: FirebaseConfigSource;
+  summary: Record<string, unknown>;
+  issues: FirebaseConfigIssue[];
+  errorMessage: string | null;
+};
 
-function requireFirebaseEnv(value: string | undefined, envName: string): string {
-  if (isMissingFirebaseEnv(value)) {
-    throw new Error(`[Firebase] Missing required env var: ${envName}`);
+export type FirebaseBootstrapResult =
+  | {
+      ok: true;
+      diagnostics: FirebaseBootstrapDiagnostics;
+    }
+  | {
+      ok: false;
+      error: Error;
+      diagnostics: FirebaseBootstrapDiagnostics;
+    };
+
+type FirebaseServices = {
+  config: FirebaseRuntimeConfig;
+  app: FirebaseApp;
+  auth: FirebaseAuth.Auth;
+  firestore: Firestore;
+  storage: FirebaseStorage;
+};
+
+class FirebaseBootstrapError extends Error {
+  readonly step: FirebaseBootstrapStep;
+  readonly source: FirebaseConfigSource;
+  readonly issues: FirebaseConfigIssue[];
+
+  constructor(message: string, options: {
+    step: FirebaseBootstrapStep;
+    source: FirebaseConfigSource;
+    issues?: FirebaseConfigIssue[];
+    cause?: unknown;
+  }) {
+    super(message);
+    this.name = "FirebaseBootstrapError";
+    this.step = options.step;
+    this.source = options.source;
+    this.issues = options.issues || [];
+
+    if (options.cause && !(this as any).cause) {
+      (this as any).cause = options.cause;
+    }
   }
-
-  return value!.trim();
 }
 
-function assertFirebaseEnvOrThrow() {
-  const requiredEnvEntries: Array<[string, string | undefined]> = [
-    ["EXPO_PUBLIC_FIREBASE_API_KEY", rawFirebaseConfig.apiKey],
-    ["EXPO_PUBLIC_FIREBASE_AUTH_DOMAIN", rawFirebaseConfig.authDomain],
-    ["EXPO_PUBLIC_FIREBASE_PROJECT_ID", rawFirebaseConfig.projectId],
-    ["EXPO_PUBLIC_FIREBASE_STORAGE_BUCKET", rawFirebaseConfig.storageBucket],
-    ["EXPO_PUBLIC_FIREBASE_MESSAGING_SENDER_ID", rawFirebaseConfig.messagingSenderId],
-    ["EXPO_PUBLIC_FIREBASE_APP_ID", rawFirebaseConfig.appId],
-  ];
+let bootstrapStatus: FirebaseBootstrapStatus = "idle";
+let bootstrapStep: FirebaseBootstrapStep = "idle";
+let bootstrapSource: FirebaseConfigSource = "missing-runtime-extra.firebase";
+let bootstrapSummary: Record<string, unknown> = {};
+let bootstrapIssues: FirebaseConfigIssue[] = [];
+let bootstrapErrorMessage: string | null = null;
 
-  const missingEnvVars = requiredEnvEntries
-    .filter(([, value]) => isMissingFirebaseEnv(value))
-    .map(([envName]) => envName);
+let bootstrapPromise: Promise<FirebaseBootstrapResult> | null = null;
+let services: FirebaseServices | null = null;
 
-  if (missingEnvVars.length > 0) {
-    throw new Error(
-      `[Firebase] Missing required Expo env vars: ${missingEnvVars.join(", ")}. ` +
-      "Set these EXPO_PUBLIC_FIREBASE_* values in your release build environment."
-    );
+function setBootstrapState(patch: Partial<FirebaseBootstrapDiagnostics>) {
+  if (patch.status) bootstrapStatus = patch.status;
+  if (patch.step) bootstrapStep = patch.step;
+  if (patch.source) bootstrapSource = patch.source;
+  if (patch.summary) bootstrapSummary = patch.summary;
+  if (patch.issues) bootstrapIssues = patch.issues;
+  if (Object.prototype.hasOwnProperty.call(patch, "errorMessage")) {
+    bootstrapErrorMessage = patch.errorMessage ?? null;
   }
 }
 
-function buildFirebaseConfig(): FirebaseOptions {
-  assertFirebaseEnvOrThrow();
-
-  return {
-    apiKey: requireFirebaseEnv(rawFirebaseConfig.apiKey, "EXPO_PUBLIC_FIREBASE_API_KEY"),
-    authDomain: requireFirebaseEnv(rawFirebaseConfig.authDomain, "EXPO_PUBLIC_FIREBASE_AUTH_DOMAIN"),
-    projectId: requireFirebaseEnv(rawFirebaseConfig.projectId, "EXPO_PUBLIC_FIREBASE_PROJECT_ID"),
-    storageBucket: requireFirebaseEnv(rawFirebaseConfig.storageBucket, "EXPO_PUBLIC_FIREBASE_STORAGE_BUCKET"),
-    messagingSenderId: requireFirebaseEnv(
-      rawFirebaseConfig.messagingSenderId,
-      "EXPO_PUBLIC_FIREBASE_MESSAGING_SENDER_ID"
-    ),
-    appId: requireFirebaseEnv(rawFirebaseConfig.appId, "EXPO_PUBLIC_FIREBASE_APP_ID"),
-  };
+function createBootstrapError(
+  step: FirebaseBootstrapStep,
+  source: FirebaseConfigSource,
+  message: string,
+  options?: {
+    cause?: unknown;
+    issues?: FirebaseConfigIssue[];
+  }
+): FirebaseBootstrapError {
+  return new FirebaseBootstrapError(message, {
+    step,
+    source,
+    issues: options?.issues,
+    cause: options?.cause,
+  });
 }
 
-function createFirebaseDiagnostics() {
-  return {
-    hasApiKey: !isMissingFirebaseEnv(rawFirebaseConfig.apiKey),
-    apiKeyLength: rawFirebaseConfig.apiKey?.trim().length ?? 0,
-    projectId: rawFirebaseConfig.projectId?.trim() ?? "",
-    authDomain: rawFirebaseConfig.authDomain?.trim() ?? "",
-    appIdLength: rawFirebaseConfig.appId?.trim().length ?? 0,
-  };
-}
-
-const firebaseDiagnostics = createFirebaseDiagnostics();
-
-let firebaseConfig: FirebaseOptions;
-try {
-  firebaseConfig = buildFirebaseConfig();
-  console.info("[Firebase] startup config diagnostics", firebaseDiagnostics);
-} catch (error) {
-  console.error("[Firebase] Invalid startup config", firebaseDiagnostics);
-  throw error;
-}
-
-export function getFirebaseStartupDiagnostics() {
-  return { ...firebaseDiagnostics };
-}
-
-const app = getApps().length ? getApp() : initializeApp(firebaseConfig);
-
-type AuthDeps = Parameters<typeof FirebaseAuth.initializeAuth>[1];
-
-function getAuthDependencies(): AuthDeps | undefined {
+function getAuthDependencies(): Parameters<typeof FirebaseAuth.initializeAuth>[1] | undefined {
   if (Platform.OS === "web") {
     return {
       persistence: FirebaseAuth.browserLocalPersistence,
@@ -115,61 +138,239 @@ function getAuthDependencies(): AuthDeps | undefined {
   if (typeof getReactNativePersistence === "function") {
     return {
       persistence: getReactNativePersistence(AsyncStorage),
-    } as AuthDeps;
+    } as Parameters<typeof FirebaseAuth.initializeAuth>[1];
   }
 
   return undefined;
 }
 
-export const auth = (() => {
-  const deps = getAuthDependencies();
-  try {
-    return deps ? FirebaseAuth.initializeAuth(app, deps) : FirebaseAuth.initializeAuth(app);
-  } catch {
-    return FirebaseAuth.getAuth(app);
-  }
-})();
+export function getFirebaseBootstrapDiagnostics(): FirebaseBootstrapDiagnostics {
+  return {
+    status: bootstrapStatus,
+    step: bootstrapStep,
+    source: bootstrapSource,
+    summary: { ...bootstrapSummary },
+    issues: [...bootstrapIssues],
+    errorMessage: bootstrapErrorMessage,
+  };
+}
 
-export type FirebaseUser = FirebaseAuth.User;
+export function getFirebaseStartupDiagnostics(): FirebaseBootstrapDiagnostics {
+  return getFirebaseBootstrapDiagnostics();
+}
+
+export async function initializeFirebase(): Promise<FirebaseBootstrapResult> {
+  if (services) {
+    return {
+      ok: true,
+      diagnostics: getFirebaseBootstrapDiagnostics(),
+    };
+  }
+
+  if (bootstrapPromise) {
+    return bootstrapPromise;
+  }
+
+  setBootstrapState({
+    status: "initializing",
+    step: "runtime-config",
+    issues: [],
+    errorMessage: null,
+  });
+
+  bootstrapPromise = (async (): Promise<FirebaseBootstrapResult> => {
+    try {
+      logFirebase("Firebase initialization started");
+
+      logConfig("Loading runtime configuration");
+      const runtimeConfig = loadRuntimeConfig();
+      setBootstrapState({
+        step: "runtime-config",
+        source: runtimeConfig.firebaseSource,
+      });
+
+      logConfig("Env/config source selected", {
+        appEnv: runtimeConfig.appEnv,
+        source: runtimeConfig.firebaseSource,
+      });
+
+      const summary = buildFirebaseConfigSummary(runtimeConfig.firebase, runtimeConfig.firebaseSource);
+      setBootstrapState({ summary });
+      logConfig("Firebase config summary", summary);
+
+      setBootstrapState({ step: "config-validate" });
+      logConfig("Validating Firebase configuration");
+      const validation = validateFirebaseConfig(runtimeConfig.firebase, runtimeConfig.firebaseSource);
+
+      if (!validation.ok) {
+        const details = formatFirebaseValidationIssues(validation.issues);
+        throw createBootstrapError(
+          "config-validate",
+          runtimeConfig.firebaseSource,
+          `Firebase configuration invalid.\n${details}`,
+          { issues: validation.issues }
+        );
+      }
+
+      logConfig("Firebase config validated");
+
+      setBootstrapState({ step: "app-init" });
+      logFirebase("Initializing Firebase app");
+      const app = getApps().length > 0 ? getApp() : initializeApp(validation.config);
+      logFirebase("Firebase app initialized");
+
+      setBootstrapState({ step: "auth-init" });
+      logFirebase("Firebase Auth initialization started");
+      const authDeps = getAuthDependencies();
+      let auth: FirebaseAuth.Auth;
+
+      try {
+        auth = authDeps ? FirebaseAuth.initializeAuth(app, authDeps) : FirebaseAuth.initializeAuth(app);
+      } catch {
+        auth = FirebaseAuth.getAuth(app);
+      }
+
+      logFirebase("Firebase Auth initialized");
+
+      setBootstrapState({ step: "firestore-init" });
+      logFirebase("Firestore initialization started");
+      const firestore = getFirestore(app);
+      logFirebase("Firestore initialized");
+
+      setBootstrapState({ step: "storage-init" });
+      logFirebase("Storage initialization started");
+      const storage = getStorage(app);
+      logFirebase("Storage initialized");
+
+      services = {
+        config: validation.config,
+        app,
+        auth,
+        firestore,
+        storage,
+      };
+
+      setBootstrapState({
+        status: "ready",
+        step: "ready",
+        issues: [],
+        errorMessage: null,
+      });
+
+      return {
+        ok: true,
+        diagnostics: getFirebaseBootstrapDiagnostics(),
+      };
+    } catch (error) {
+      const knownError =
+        error instanceof FirebaseBootstrapError
+          ? error
+          : createBootstrapError(
+              bootstrapStep === "idle" ? "failed" : bootstrapStep,
+              bootstrapSource,
+              "Firebase initialization failed",
+              { cause: error }
+            );
+
+      setBootstrapState({
+        status: "failed",
+        step: "failed",
+        source: knownError.source,
+        issues: knownError.issues,
+        errorMessage: knownError.message,
+      });
+
+      logError("Firebase initialization failed", knownError, {
+        step: knownError.step,
+        source: knownError.source,
+        issueCount: knownError.issues.length,
+      });
+
+      if (__DEV__) {
+        throw knownError;
+      }
+
+      return {
+        ok: false,
+        error: knownError,
+        diagnostics: getFirebaseBootstrapDiagnostics(),
+      };
+    } finally {
+      bootstrapPromise = null;
+    }
+  })();
+
+  return bootstrapPromise;
+}
+
+function requireFirebaseServices(caller: string): FirebaseServices {
+  if (!services) {
+    const diagnostics = getFirebaseBootstrapDiagnostics();
+
+    throw new Error(
+      `[6PAC FIREBASE] ${caller} called before Firebase was ready. ` +
+        `status=${diagnostics.status}, step=${diagnostics.step}, source=${diagnostics.source}`
+    );
+  }
+
+  return services;
+}
+
+export function getFirebaseApp(): FirebaseApp {
+  return requireFirebaseServices("getFirebaseApp").app;
+}
+
+export function getFirebaseAuth(): FirebaseAuth.Auth {
+  return requireFirebaseServices("getFirebaseAuth").auth;
+}
+
+export function getFirebaseDb(): Firestore {
+  return requireFirebaseServices("getFirebaseDb").firestore;
+}
+
+export function getFirebaseStorage(): FirebaseStorage {
+  return requireFirebaseServices("getFirebaseStorage").storage;
+}
 
 export function onAuthStateChanged(
-  authInstance: FirebaseAuth.Auth,
   nextOrObserver: (...args: any[]) => void,
   error?: (...args: any[]) => void,
   completed?: (...args: any[]) => void
 ) {
-  return FirebaseAuth.onAuthStateChanged(authInstance, nextOrObserver as any, error as any, completed as any);
+  logFirebase("Auth state listener attached");
+  return FirebaseAuth.onAuthStateChanged(getFirebaseAuth(), nextOrObserver as any, error as any, completed as any);
 }
 
-export function signInWithEmailAndPassword(authInstance: FirebaseAuth.Auth, email: string, password: string) {
-  return FirebaseAuth.signInWithEmailAndPassword(authInstance, email, password);
+export function signInWithEmailAndPassword(email: string, password: string) {
+  return FirebaseAuth.signInWithEmailAndPassword(getFirebaseAuth(), email, password);
 }
 
-export function createUserWithEmailAndPassword(authInstance: FirebaseAuth.Auth, email: string, password: string) {
-  return FirebaseAuth.createUserWithEmailAndPassword(authInstance, email, password);
+export function createUserWithEmailAndPassword(email: string, password: string) {
+  return FirebaseAuth.createUserWithEmailAndPassword(getFirebaseAuth(), email, password);
 }
 
-export function signOut(authInstance: FirebaseAuth.Auth) {
-  return FirebaseAuth.signOut(authInstance);
+export function signOut() {
+  return FirebaseAuth.signOut(getFirebaseAuth());
 }
 
-export const db = getFirestore(app);
+export type FirebaseUser = FirebaseAuth.User;
 
 let firestoreOfflineUnsub: (() => void) | null = null;
 let firestoreNetworkUpdate: Promise<void> = Promise.resolve();
 
-async function applyFirestoreNetworkState() {
+async function applyFirestoreNetworkState(firestore: Firestore) {
   const isOnline = getIsOnline();
+
   try {
     if (isOnline) {
-      console.log("🟢 Firestore: enabling network");
-      await enableNetwork(db);
+      logFirebase("Enabling Firestore network");
+      await enableNetwork(firestore);
     } else {
-      console.log("🔴 Firestore: disabling network");
-      await disableNetwork(db);
+      logFirebase("Disabling Firestore network");
+      await disableNetwork(firestore);
     }
   } catch (error) {
-    console.error("Firestore network state update error:", error);
+    logError("Firestore network state update failed", error);
   }
 }
 
@@ -178,31 +379,31 @@ export async function initializeFirestoreOffline(): Promise<() => void> {
     return firestoreOfflineUnsub;
   }
 
+  const firestore = getFirebaseDb();
+
   startNetworkListener();
 
   if (Platform.OS === "web") {
     try {
-      await enableIndexedDbPersistence(db);
-      console.log("Firestore offline persistence enabled (web)");
-    } catch (err: any) {
-      if (err?.code === "failed-precondition") {
-        console.warn("Firestore persistence unavailable: multiple tabs open");
-      } else if (err?.code === "unimplemented") {
-        console.warn("Firestore persistence unavailable: browser does not support IndexedDB");
+      await enableIndexedDbPersistence(firestore);
+      logFirebase("Firestore IndexedDB persistence enabled (web)");
+    } catch (error: any) {
+      if (error?.code === "failed-precondition") {
+        logError("Firestore persistence unavailable: multiple tabs open", error);
+      } else if (error?.code === "unimplemented") {
+        logError("Firestore persistence unavailable: IndexedDB not supported", error);
       } else {
-        console.error("Firestore persistence setup error:", err);
+        logError("Firestore persistence setup failed", error);
       }
     }
-  } else if (__DEV__) {
-    console.log(`Firestore IndexedDB persistence skipped on ${Platform.OS}`);
   }
 
-  await applyFirestoreNetworkState();
+  await applyFirestoreNetworkState(firestore);
 
   const unsubscribe = subscribeNetworkStatus(() => {
     firestoreNetworkUpdate = firestoreNetworkUpdate
       .catch(() => undefined)
-      .then(() => applyFirestoreNetworkState());
+      .then(() => applyFirestoreNetworkState(firestore));
   });
 
   firestoreOfflineUnsub = () => {

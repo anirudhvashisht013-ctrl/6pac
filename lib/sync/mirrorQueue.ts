@@ -1,5 +1,5 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
-import { db } from "@/lib/firebase";
+import { getFirebaseDb } from "@/lib/firebase";
 import { deleteDoc, doc, serverTimestamp, setDoc } from "firebase/firestore";
 import { getIsOnline, startNetworkListener, subscribeNetworkStatus } from "@/lib/network";
 import { useSyncExternalStore } from "react";
@@ -92,7 +92,7 @@ function nextRetry(attempts: number) {
 }
 
 async function applyItem(item: QueueItem) {
-  const ref = doc(db, "users", item.uid, item.collectionName, item.docId);
+  const ref = doc(getFirebaseDb(), "users", item.uid, item.collectionName, item.docId);
   if (item.action === "delete") {
     await deleteDoc(ref);
     return;

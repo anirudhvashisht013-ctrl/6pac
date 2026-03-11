@@ -38,6 +38,9 @@ export default function LoginScreen() {
         return 'Too many attempts. Try again later';
       case 'auth/network-request-failed':
         return 'Network error. Check your internet connection';
+      case 'auth/invalid-api-key':
+      case 'auth/app-not-authorized':
+        return 'Firebase app config is invalid. Contact support.';
       default:
         return 'Login failed. Please try again';
     }

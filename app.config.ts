@@ -55,6 +55,9 @@ export default ({ config }: ConfigContext): ExpoConfig => {
     },
     extra: {
       appEnv,
+      eas: {
+        projectId: "c892268c-4c24-4c12-9ee4-1a4085d7c876",
+      },
       firebase: {
         apiKey: readEnv("EXPO_PUBLIC_FIREBASE_API_KEY"),
         authDomain: readEnv("EXPO_PUBLIC_FIREBASE_AUTH_DOMAIN"),

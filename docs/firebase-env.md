@@ -46,3 +46,13 @@ npm run eas:build:android
 ```
 
 This runs validation first, then starts EAS build.
+
+Validation chain:
+
+- `npm run validate:lockfile-sync`
+- `npm run validate:firebase-config:prod`
+
+This prevents both common pre-build failures:
+
+- EAS `npm ci` failing because `package.json` and `package-lock.json` are out of sync.
+- Firebase env values being missing/placeholder at release build time.

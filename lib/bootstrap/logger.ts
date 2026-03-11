@@ -30,10 +30,45 @@ function logWarn(scope: BootLogScope, message: string, payload?: LogPayload) {
 
 function toErrorPayload(error: unknown): Record<string, unknown> {
   if (error instanceof Error) {
-    return {
+    const enriched = error as Error & {
+      code?: unknown;
+      customData?: unknown;
+      cause?: unknown;
+    };
+
+    const payload: Record<string, unknown> = {
       name: error.name,
       message: error.message,
       stack: error.stack || "",
+    };
+
+    if (typeof enriched.code === "string") {
+      payload.code = enriched.code;
+    }
+
+    if (typeof enriched.customData !== "undefined") {
+      payload.customData = enriched.customData;
+    }
+
+    if (enriched.cause) {
+      payload.cause =
+        enriched.cause instanceof Error
+          ? {
+              name: enriched.cause.name,
+              message: enriched.cause.message,
+              stack: enriched.cause.stack || "",
+            }
+          : String(enriched.cause);
+    }
+
+    return payload;
+  }
+
+  if (error && typeof error === "object") {
+    const asRecord = error as Record<string, unknown>;
+    return {
+      ...asRecord,
+      message: typeof asRecord.message === "string" ? asRecord.message : String(error),
     };
   }
 

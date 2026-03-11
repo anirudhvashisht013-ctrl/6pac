@@ -22,6 +22,8 @@ import {
 import { loadRuntimeConfig } from "@/lib/config/runtimeConfig";
 import { logConfig, logError, logFirebase } from "@/lib/bootstrap/logger";
 
+type AuthDependencies = Parameters<typeof FirebaseAuth.initializeAuth>[1];
+
 type FirebaseBootstrapStep =
   | "idle"
   | "runtime-config"
@@ -124,24 +126,65 @@ function createBootstrapError(
   });
 }
 
-function getAuthDependencies(): Parameters<typeof FirebaseAuth.initializeAuth>[1] | undefined {
-  if (Platform.OS === "web") {
+function describeUnknownError(error: unknown): string {
+  if (error instanceof Error) {
+    return error.message;
+  }
+  return String(error);
+}
+
+type AsyncStorageLike = Pick<typeof AsyncStorage, "setItem" | "getItem" | "removeItem">;
+
+function hasAsyncStorageMethods(value: unknown): value is AsyncStorageLike {
+  if (!value || typeof value !== "object") return false;
+  const candidate = value as Partial<AsyncStorageLike>;
+
+  return (
+    typeof candidate.setItem === "function" &&
+    typeof candidate.getItem === "function" &&
+    typeof candidate.removeItem === "function"
+  );
+}
+
+function getFirebaseErrorCode(error: unknown): string | null {
+  if (!error || typeof error !== "object") return null;
+  const code = (error as { code?: unknown }).code;
+  return typeof code === "string" ? code : null;
+}
+
+function isAlreadyInitializedError(error: unknown): boolean {
+  const code = getFirebaseErrorCode(error);
+  return Boolean(code && code.includes("already-initialized"));
+}
+
+function resolveAuthDependencies(platform: typeof Platform.OS): AuthDependencies {
+  if (platform === "web") {
     return {
       persistence: FirebaseAuth.browserLocalPersistence,
-    };
+    } as AuthDependencies;
   }
 
-  const getReactNativePersistence = (FirebaseAuth as any).getReactNativePersistence as
-    | ((storage: typeof AsyncStorage) => unknown)
-    | undefined;
-
-  if (typeof getReactNativePersistence === "function") {
-    return {
-      persistence: getReactNativePersistence(AsyncStorage),
-    } as Parameters<typeof FirebaseAuth.initializeAuth>[1];
+  if (!hasAsyncStorageMethods(AsyncStorage)) {
+    throw new Error(
+      "React Native AsyncStorage module is unavailable. " +
+        "Install and link @react-native-async-storage/async-storage for Firebase Auth persistence."
+    );
   }
 
-  return undefined;
+  const getReactNativePersistence = (FirebaseAuth as unknown as {
+    getReactNativePersistence?: (storage: AsyncStorageLike) => FirebaseAuth.Persistence;
+  }).getReactNativePersistence;
+
+  if (typeof getReactNativePersistence !== "function") {
+    throw new Error(
+      "firebase/auth does not expose getReactNativePersistence in this runtime. " +
+        "Ensure Expo Go resolves the React Native Firebase Auth entrypoint."
+    );
+  }
+
+  return {
+    persistence: getReactNativePersistence(AsyncStorage),
+  } as AuthDependencies;
 }
 
 export function getFirebaseBootstrapDiagnostics(): FirebaseBootstrapDiagnostics {
@@ -221,13 +264,76 @@ export async function initializeFirebase(): Promise<FirebaseBootstrapResult> {
 
       setBootstrapState({ step: "auth-init" });
       logFirebase("Firebase Auth initialization started");
-      const authDeps = getAuthDependencies();
       let auth: FirebaseAuth.Auth;
+      let authDeps: AuthDependencies;
 
       try {
-        auth = authDeps ? FirebaseAuth.initializeAuth(app, authDeps) : FirebaseAuth.initializeAuth(app);
-      } catch {
-        auth = FirebaseAuth.getAuth(app);
+        authDeps = resolveAuthDependencies(Platform.OS);
+      } catch (error) {
+        logError("Firebase Auth dependency resolution failed", error, {
+          step: "auth-init",
+          platform: Platform.OS,
+        });
+        throw createBootstrapError(
+          "auth-init",
+          runtimeConfig.firebaseSource,
+          `Firebase Auth dependency resolution failed: ${describeUnknownError(error)}`,
+          { cause: error }
+        );
+      }
+
+      logFirebase("Firebase Auth dependencies resolved", {
+        platform: Platform.OS,
+        mode: Platform.OS === "web" ? "browserLocalPersistence" : "getReactNativePersistence(AsyncStorage)",
+      });
+
+      try {
+        auth = FirebaseAuth.initializeAuth(app, authDeps);
+      } catch (error) {
+        const errorCode = getFirebaseErrorCode(error) || "unknown";
+        logError("Firebase Auth initializeAuth failed", error, {
+          step: "auth-init",
+          platform: Platform.OS,
+          code: errorCode,
+        });
+
+        if (!isAlreadyInitializedError(error)) {
+          throw createBootstrapError(
+            "auth-init",
+            runtimeConfig.firebaseSource,
+            `Firebase Auth initializeAuth failed (${errorCode}): ${describeUnknownError(error)}`,
+            { cause: error }
+          );
+        }
+
+        try {
+          auth = FirebaseAuth.getAuth(app);
+          logFirebase("Firebase Auth already initialized; reusing existing instance", {
+            platform: Platform.OS,
+            code: errorCode,
+          });
+        } catch (recoveryError) {
+          logError("Firebase Auth getAuth recovery failed after already-initialized", recoveryError, {
+            step: "auth-init",
+            platform: Platform.OS,
+            originalCode: errorCode,
+          });
+          throw createBootstrapError(
+            "auth-init",
+            runtimeConfig.firebaseSource,
+            "Firebase Auth recovery failed after already-initialized error. " +
+              `initializeAuth=${describeUnknownError(error)}; getAuth=${describeUnknownError(recoveryError)}`,
+            { cause: recoveryError }
+          );
+        }
+      }
+
+      if (!auth) {
+        throw createBootstrapError(
+          "auth-init",
+          runtimeConfig.firebaseSource,
+          "Firebase Auth initialization failed: no auth instance returned"
+        );
       }
 
       logFirebase("Firebase Auth initialized");
@@ -268,7 +374,7 @@ export async function initializeFirebase(): Promise<FirebaseBootstrapResult> {
           : createBootstrapError(
               bootstrapStep === "idle" ? "failed" : bootstrapStep,
               bootstrapSource,
-              "Firebase initialization failed",
+              `Firebase initialization failed at step ${bootstrapStep}: ${describeUnknownError(error)}`,
               { cause: error }
             );
 

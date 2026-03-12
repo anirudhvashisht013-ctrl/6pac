@@ -15,6 +15,7 @@ import { useMirrorSyncState } from "@/lib/sync/mirrorQueue";
 import { useNetworkStatus } from "@/lib/network";
 import { syncNow } from "@/lib/sync/syncNow";
 import { useReminders } from "@/context/ReminderContext";
+import { formatDateCompact } from "@/lib/dates";
 
 type ProfileDoc = {
   email?: string;
@@ -150,7 +151,7 @@ export default function ProfileHubScreen() {
   const displayName = profile?.fullName || "—";
   const displayEmail = user?.email || profile?.email || "—";
   const displaySex = profile?.sex || "—";
-  const displayDob = profile?.dateOfBirth || "—";
+  const displayDob = profile?.dateOfBirth ? formatDateCompact(profile.dateOfBirth as any) : "—";
   const syncTitle = !network.isOnline
     ? "Offline"
     : sync.pendingCount > 0
@@ -163,6 +164,13 @@ export default function ProfileHubScreen() {
       : sync.lastSyncedAt
         ? `Last synced ${new Date(sync.lastSyncedAt).toLocaleString()}`
         : "No pending changes";
+  const syncDebugSubtitle =
+    typeof __DEV__ !== "undefined" &&
+    __DEV__ &&
+    sync.lastFailedCollection &&
+    sync.lastFailedDocId
+      ? `Queue ${sync.queueLength} • Last failed ${sync.lastFailedCollection}/${sync.lastFailedDocId}`
+      : null;
   const hasMeasurementPending = useMemo(
     () =>
       pendingItems.some(
@@ -353,6 +361,9 @@ export default function ProfileHubScreen() {
           {manualSyncError ? <Text style={styles.syncErrorText}>{manualSyncError}</Text> : null}
           {!manualSyncError && sync.lastError ? (
             <Text style={styles.syncErrorText}>Last sync error: {sync.lastError}</Text>
+          ) : null}
+          {!manualSyncError && syncDebugSubtitle ? (
+            <Text style={styles.syncDebugText}>{syncDebugSubtitle}</Text>
           ) : null}
         </View>
 
@@ -590,6 +601,12 @@ const styles = StyleSheet.create({
     fontFamily: "Outfit_500Medium",
     fontSize: 12,
     color: C.error,
+    marginTop: 8,
+  },
+  syncDebugText: {
+    fontFamily: "Outfit_400Regular",
+    fontSize: 11,
+    color: C.textMuted,
     marginTop: 8,
   },
 

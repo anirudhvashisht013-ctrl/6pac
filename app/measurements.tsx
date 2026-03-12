@@ -26,7 +26,7 @@ import {
 } from "@/lib/measurements/formMapping";
 import { canLogMeasurementDay } from "@/lib/measurements/slots";
 import { measurementsRepo } from "@/lib/storage";
-import { todayYMD } from "@/lib/dates";
+import { formatDateCompact, todayYMD } from "@/lib/dates";
 
 const MEASUREMENT_FIELDS = [
   { key: "waist", label: "Waist" },
@@ -55,7 +55,7 @@ export default function MeasurementsScreen() {
   const [bodyFat, setBodyFat] = useState("");
   const [notes, setNotes] = useState("");
 
-  const title = `Log for ${scheduledYMD}`;
+  const title = `Log for ${formatDateCompact(scheduledYMD)}`;
 
   const hydrateExisting = useCallback(async () => {
     if (!user) return;

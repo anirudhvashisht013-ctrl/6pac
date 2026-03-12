@@ -296,7 +296,7 @@ export default function OnboardingScreen() {
             ) : (
               <>
                 <Text style={styles.nextBtnText}>
-                  {step === 'goal' ? "Let&apos;s go!" : 'Continue'}
+                  {step === 'goal' ? "Let's go!" : 'Continue'}
                 </Text>
                 <Ionicons name="arrow-forward" size={18} color={C.bg} />
               </>

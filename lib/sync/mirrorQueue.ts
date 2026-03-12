@@ -3,6 +3,10 @@ import { getFirebaseDb } from "@/lib/firebase";
 import { deleteDoc, doc, serverTimestamp, setDoc } from "firebase/firestore";
 import { getIsOnline, startNetworkListener, subscribeNetworkStatus } from "@/lib/network";
 import { useSyncExternalStore } from "react";
+import {
+  sanitizeFirestorePayload,
+  summarizeFirestorePayloadShape,
+} from "@/lib/sync/firestorePayload";
 
 type QueueAction = "upsert" | "delete";
 
@@ -20,10 +24,14 @@ type QueueItem = {
 };
 
 type MirrorSyncState = {
+  queueLength: number;
   pendingCount: number;
   syncing: boolean;
   isOnline: boolean;
   lastError: string | null;
+  lastFailedCollection: string | null;
+  lastFailedDocId: string | null;
+  lastFailedError: string | null;
   runTotal: number;
   runProcessed: number;
   nextRetryAt: number | null;
@@ -34,6 +42,7 @@ type MirrorSyncState = {
 const QUEUE_KEY = "@6pac:mirror_queue_v1";
 const MAX_BACKOFF_MS = 5 * 60 * 1000;
 const BASE_BACKOFF_MS = 5000;
+const DEV_MODE = typeof __DEV__ !== "undefined" && __DEV__;
 
 let initialized = false;
 let processing = false;
@@ -41,10 +50,14 @@ const stateListeners = new Set<() => void>();
 let queueMutation: Promise<void> = Promise.resolve();
 
 let mirrorSyncState: MirrorSyncState = {
+  queueLength: 0,
   pendingCount: 0,
   syncing: false,
   isOnline: true,
   lastError: null,
+  lastFailedCollection: null,
+  lastFailedDocId: null,
+  lastFailedError: null,
   runTotal: 0,
   runProcessed: 0,
   nextRetryAt: null,
@@ -90,7 +103,7 @@ async function saveQueue(queue: QueueItem[]) {
       if (min == null) return item.nextRetryAt;
       return Math.min(min, item.nextRetryAt);
     }, null);
-  setState({ pendingCount: queue.length, nextRetryAt });
+  setState({ queueLength: queue.length, pendingCount: queue.length, nextRetryAt });
 }
 
 function itemKey(i: Pick<QueueItem, "uid" | "collectionName" | "docId">) {
@@ -107,15 +120,30 @@ async function applyItem(item: QueueItem) {
     await deleteDoc(ref);
     return;
   }
+
+  const sanitizedPayload = sanitizeFirestorePayload(item.payload || {});
   await setDoc(
     ref,
     {
-      ...(item.payload || {}),
+      ...(sanitizedPayload as Record<string, unknown>),
       mirroredAt: serverTimestamp(),
       mirrorVersion: 1,
     },
     { merge: true }
   );
+}
+
+export function reportMirrorSyncError(details: {
+  collectionName: string;
+  docId: string;
+  error: string;
+}) {
+  setState({
+    lastError: `${details.collectionName}/${details.docId}: ${details.error}`,
+    lastFailedCollection: details.collectionName,
+    lastFailedDocId: details.docId,
+    lastFailedError: details.error,
+  });
 }
 
 export function initializeMirrorQueue() {
@@ -132,7 +160,7 @@ export function initializeMirrorQueue() {
   });
 
   void loadQueue().then((q) => {
-    setState({ pendingCount: q.length });
+    setState({ queueLength: q.length, pendingCount: q.length });
     if (q.length > 0) void processMirrorQueue();
   });
 }
@@ -226,7 +254,7 @@ export async function processMirrorQueue(opts?: { force?: boolean }) {
     const due = dequeue.due;
     if (due.length === 0) {
       if (dequeue.wasEmpty) {
-        setState({ pendingCount: 0, nextRetryAt: null });
+        setState({ queueLength: 0, pendingCount: 0, nextRetryAt: null });
       }
       setState({ syncing: false, runProcessed: 0, runTotal: 0 });
       return;
@@ -245,17 +273,31 @@ export async function processMirrorQueue(opts?: { force?: boolean }) {
         processed += 1;
         setState({ runProcessed: processed });
       } catch (err: any) {
+        const errorMessage = String(err?.message || err || "mirror_write_failed");
+        if (DEV_MODE) {
+          console.warn("[mirror-queue] retry failed", {
+            collectionName: item.collectionName,
+            docId: item.docId,
+            action: item.action,
+            error: errorMessage,
+            payloadShape: item.payload ? summarizeFirestorePayloadShape(item.payload) : undefined,
+          });
+        }
         const attempts = item.attempts + 1;
         retryQueue.push({
           ...item,
           attempts,
           updatedAt: new Date().toISOString(),
           nextRetryAt: nextRetry(attempts),
-          lastError: String(err?.message || err || "mirror_write_failed"),
+          lastError: errorMessage,
         });
         processed += 1;
         setState({ runProcessed: processed });
-        setState({ lastError: String(err?.message || err || "mirror_write_failed") });
+        reportMirrorSyncError({
+          collectionName: item.collectionName,
+          docId: item.docId,
+          error: errorMessage,
+        });
       }
     }
 

@@ -68,6 +68,22 @@ export function formatDateLong(input: DateLike): string {
 }
 
 /**
+ * Compact UI date for screens that should not expose raw ISO keys.
+ * Example: "Mar-12-26"
+ */
+export function formatDateCompact(input: DateLike): string {
+  const d = toDate(input);
+  try {
+    const month = d.toLocaleDateString(undefined, { month: "short" });
+    const day = String(d.getDate()).padStart(2, "0");
+    const year = String(d.getFullYear()).slice(-2);
+    return `${month}-${day}-${year}`;
+  } catch {
+    return toYMD(d);
+  }
+}
+
+/**
  * Returns an array of 7 ISO dates for the week (Mon -> Sun)
  * If you pass a date OR an ISODate, it uses that date’s week; otherwise current week.
  */

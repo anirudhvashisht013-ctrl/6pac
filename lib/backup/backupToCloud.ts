@@ -1,4 +1,5 @@
 import {
+  exercisesRepo,
   logsRepo,
   mealsRepo,
   measurementsRepo,
@@ -11,12 +12,13 @@ import {
 import { cloudMirrorRepo } from "@/lib/repos/cloudMirrorRepo";
 
 export async function backupLocalDataToCloud(uid: string): Promise<void> {
-  const [logs, meals, targets, schedules, templates, sessions, measurements, reminders] = await Promise.all([
+  const [logs, meals, targets, schedules, templates, exercises, sessions, measurements, reminders] = await Promise.all([
     logsRepo.getAll(uid),
     mealsRepo.getAll(uid),
     targetsRepo.getAll(uid),
     schedulesRepo.getAll(uid),
     workoutsRepo.getAll(uid),
+    exercisesRepo.getAll(uid),
     sessionsRepo.getAll(uid),
     measurementsRepo.getAll(uid),
     remindersRepo.get(uid),
@@ -28,6 +30,7 @@ export async function backupLocalDataToCloud(uid: string): Promise<void> {
     ...targets.map((x) => cloudMirrorRepo.upsertTarget(uid, x)),
     ...schedules.map((x) => cloudMirrorRepo.upsertSchedule(uid, x)),
     ...templates.map((x) => cloudMirrorRepo.upsertTemplate(uid, x)),
+    ...exercises.map((x) => cloudMirrorRepo.upsertExercise(uid, x)),
     ...sessions.map((x) => cloudMirrorRepo.upsertSession(uid, x)),
     ...measurements.map((x) => cloudMirrorRepo.upsertMeasurement(uid, x)),
     ...(reminders

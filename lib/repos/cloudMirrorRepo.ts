@@ -27,9 +27,15 @@ import {
   enqueueMirrorUpsert,
   initializeMirrorQueue,
   processMirrorQueue,
+  reportMirrorSyncError,
 } from "@/lib/sync/mirrorQueue";
+import {
+  sanitizeFirestorePayload,
+  summarizeFirestorePayloadShape,
+} from "@/lib/sync/firestorePayload";
 
 const TOMBSTONES_COLLECTION = mirrorCollections.syncTombstones;
+const DEV_MODE = typeof __DEV__ !== "undefined" && __DEV__;
 
 function tombstoneDocId(collectionName: string, docId: string) {
   return `${encodeURIComponent(collectionName)}|${encodeURIComponent(docId)}`;
@@ -41,10 +47,11 @@ async function upsertDirect(
   id: string,
   payload: Record<string, unknown>
 ) {
+  const sanitizedPayload = sanitizeFirestorePayload(payload);
   await setDoc(
     doc(getFirebaseDb(), "users", uid, collectionName, id),
     {
-      ...payload,
+      ...(sanitizedPayload as Record<string, unknown>),
       mirroredAt: serverTimestamp(),
       mirrorVersion: 1,
     },
@@ -58,7 +65,7 @@ async function deleteDirect(uid: string, collectionName: string, id: string) {
 
 async function upsertWithQueue(uid: string, collectionName: string, id: string, payload: unknown) {
   initializeMirrorQueue();
-  const normalized = (payload || {}) as Record<string, unknown>;
+  const normalized = sanitizeFirestorePayload((payload || {}) as Record<string, unknown>);
 
   // Fast path: write directly when possible so cloud reflects changes immediately.
   // If this fails (offline / permission / transient), fallback to durable queue.
@@ -66,7 +73,22 @@ async function upsertWithQueue(uid: string, collectionName: string, id: string, 
     await upsertDirect(uid, collectionName, id, normalized);
     await deleteDirect(uid, TOMBSTONES_COLLECTION, tombstoneDocId(collectionName, id));
     return;
-  } catch {
+  } catch (err: any) {
+    const errorMessage = String(err?.message || err || "mirror_write_failed");
+    reportMirrorSyncError({
+      collectionName,
+      docId: id,
+      error: errorMessage,
+    });
+    if (DEV_MODE) {
+      console.warn("[cloud-mirror] direct upsert failed; queueing fallback", {
+        uid,
+        collectionName,
+        docId: id,
+        error: errorMessage,
+        payloadShape: summarizeFirestorePayloadShape(normalized),
+      });
+    }
     // Queue fallback handled below.
   }
 
@@ -91,7 +113,21 @@ async function removeWithTombstoneQueue(uid: string, collectionName: string, id:
       deletedAt,
     });
     return;
-  } catch {
+  } catch (err: any) {
+    const errorMessage = String(err?.message || err || "mirror_delete_failed");
+    reportMirrorSyncError({
+      collectionName,
+      docId: id,
+      error: errorMessage,
+    });
+    if (DEV_MODE) {
+      console.warn("[cloud-mirror] direct delete failed; queueing fallback", {
+        uid,
+        collectionName,
+        docId: id,
+        error: errorMessage,
+      });
+    }
     // Queue fallback handled below.
   }
 

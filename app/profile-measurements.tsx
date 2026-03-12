@@ -32,7 +32,7 @@ import {
 } from "@/lib/measurements/slots";
 import { presetRange } from "@/lib/ranges";
 import { measurementsRepo } from "@/lib/storage";
-import { todayYMD } from "@/lib/dates";
+import { formatDateCompact, todayYMD } from "@/lib/dates";
 
 type MonthTab = { key: string; label: string };
 
@@ -276,7 +276,7 @@ export default function ProfileMeasurementsScreen() {
                 <View style={styles.nextTop}>
                   <Text style={styles.nextTitle}>Next check-in</Text>
                   <Text style={styles.nextSub}>
-                    {nextDueSlot.date} at {formatTime(nextDueSlot.scheduledAt)}
+                    {formatDateCompact(nextDueSlot.date)} at {formatTime(nextDueSlot.scheduledAt)}
                   </Text>
                 </View>
 
@@ -373,7 +373,7 @@ export default function ProfileMeasurementsScreen() {
                     <View key={slot.date} style={styles.slotCard}>
                       <View style={styles.slotTop}>
                         <View style={{ flex: 1 }}>
-                          <Text style={styles.slotDate}>{slot.date}</Text>
+                          <Text style={styles.slotDate}>{formatDateCompact(slot.date)}</Text>
                           <Text style={styles.slotTime}>
                             Target time: {formatTime(slot.scheduledAt)}
                           </Text>

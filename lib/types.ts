@@ -123,7 +123,9 @@ export interface BlockPerformance {
 export interface WorkoutSession {
   id: string;
   date: string;
-  workoutTemplateId: string;
+  // Execution record foreign key. The embedded snapshot fields below are the
+  // durable execution truth once a session starts.
+  workoutTemplateId: string | null;
   workoutNameSnapshot: string;
   sessionBlocks?: WorkoutBlock[];
   startedAt: string;
@@ -203,7 +205,9 @@ export type ReminderRuntime = {
 export type ReminderState = {
   id: 'primary';
   version: 1;
+  // Durable reminder preferences that may be mirrored to Firestore.
   settings: ReminderSettings;
+  // Local operational state for snoozes, dismissals, permission recency, and last-run markers.
   runtime: ReminderRuntime;
   createdAt: string;
   updatedAt: string;
@@ -218,6 +222,9 @@ export type ReminderSettingsMirrorDoc = {
 };
 
 export type DailySummaryMirrorDoc = {
+  // Derived/materialized daily projection only.
+  // Canonical ownership remains with DailyLog, MealEntry, WorkoutSession,
+  // WeeklyTarget, and WeekSchedule/WeeklyPlan.
   id: string;
   date: string;
   version: 1;

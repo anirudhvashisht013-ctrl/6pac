@@ -1,6 +1,7 @@
 import { exportTextFile } from "@/lib/export/fileExport";
 import { localCacheRepo } from "@/lib/storage";
 import type { LocalDataSnapshot } from "@/lib/storage";
+import { compareMeasurementDates, normalizeMeasurementEntries } from "@/lib/adapters/measurementKeyAdapter";
 
 function csvCell(value: unknown): string {
   return `"${String(value ?? "").replace(/"/g, '""')}"`;
@@ -13,6 +14,7 @@ export async function exportAsJSON(uid: string): Promise<string> {
       exportedAt: new Date().toISOString(),
       userId: uid,
       ...data,
+      measurements: normalizeMeasurementEntries(data.measurements, "export:json").sort(compareMeasurementDates),
     },
     null,
     2
@@ -90,7 +92,7 @@ function buildMeasurementsCsv(data: LocalDataSnapshot): string[] {
     "date,waist_cm,chest_cm,shoulders_cm,arms_r_cm,arms_l_cm,thigh_r_cm,thigh_l_cm,biceps_r_cm,biceps_l_cm,body_fat_percent",
   ];
 
-  for (const m of data.measurements) {
+  for (const m of normalizeMeasurementEntries(data.measurements, "export:csv").sort(compareMeasurementDates)) {
     lines.push(
       [
         m.date,

@@ -2,18 +2,24 @@
 import { getFirebaseDb } from "@/lib/firebase";
 import {
   collection,
+  deleteDoc,
   doc,
   getDoc,
-  setDoc,
   getDocs,
   query,
+  setDoc,
   where,
-  deleteDoc,
   serverTimestamp,
 } from "firebase/firestore";
 import type { BodyMeasurementEntry, ISODate } from "@/lib/models";
 import type { BodyMeasurementEntry as MirrorMeasurementEntry } from "@/lib/types";
 import { cloudMirrorRepo } from "@/lib/repos/cloudMirrorRepo";
+import {
+  compareMeasurementDates,
+  isMeasurementForDate,
+  normalizeMeasurementEntries,
+} from "@/lib/adapters/measurementKeyAdapter";
+import { measurementDocId, normalizeMeasurementEntry } from "@/lib/measurements/identity";
 import { parseTimestampDate } from "@/lib/measurements/slots";
 
 const ref = (uid: string, date: ISODate) => doc(getFirebaseDb(), "users", uid, "measurements", date);
@@ -31,68 +37,108 @@ function toIsoIfDateLike(value: unknown): string | undefined {
 }
 
 function toMirrorMeasurement(entry: BodyMeasurementEntry): MirrorMeasurementEntry {
+  const normalized = normalizeMeasurementEntry(entry as MirrorMeasurementEntry);
+  const key = measurementDocId(normalized);
+  if (!key) {
+    throw new Error("measurement missing stable key");
+  }
+
   return {
-    id: entry.date,
-    date: entry.date,
-    schemaVersion: entry.schemaVersion,
-    waist: entry.waist,
-    chest: entry.chest,
-    shoulders: entry.shoulders,
-    armsR: entry.armsR,
-    armsL: entry.armsL,
-    thighR: entry.thighR,
-    thighL: entry.thighL,
-    bicepsR: entry.bicepsR,
-    bicepsL: entry.bicepsL,
-    bodyFatPercent: entry.bodyFatPercent,
-    notes: entry.notes,
-    createdAt: toIsoIfDateLike(entry.createdAt),
-    loggedAt: toIsoIfDateLike(entry.loggedAt) ?? entry.loggedAt,
-    updatedAt: toIsoIfDateLike(entry.updatedAt),
+    id: key,
+    date: normalized.date,
+    schemaVersion: normalized.schemaVersion,
+    waist: normalized.waist,
+    chest: normalized.chest,
+    shoulders: normalized.shoulders,
+    armsR: normalized.armsR,
+    armsL: normalized.armsL,
+    thighR: normalized.thighR,
+    thighL: normalized.thighL,
+    bicepsR: normalized.bicepsR,
+    bicepsL: normalized.bicepsL,
+    bodyFatPercent: normalized.bodyFatPercent,
+    notes: normalized.notes,
+    createdAt: toIsoIfDateLike(normalized.createdAt),
+    loggedAt: toIsoIfDateLike(normalized.loggedAt) ?? normalized.loggedAt,
+    updatedAt: toIsoIfDateLike(normalized.updatedAt),
   };
 }
 
 export const measurementsRepo = {
   async getByDate(uid: string, date: ISODate): Promise<BodyMeasurementEntry | null> {
     const snap = await getDoc(ref(uid, date));
-    return snap.exists() ? (snap.data() as BodyMeasurementEntry) : null;
+    if (snap.exists()) {
+      return normalizeMeasurementEntry(snap.data() as MirrorMeasurementEntry) as BodyMeasurementEntry;
+    }
+
+    const byDateSnaps = await getDocs(query(col(uid), where("date", "==", date)));
+    const byIdSnaps = await getDocs(query(col(uid), where("id", "==", date)));
+    const matches = normalizeMeasurementEntries(
+      [...byDateSnaps.docs, ...byIdSnaps.docs].map((d) => d.data() as MirrorMeasurementEntry),
+      "firestore-measurements:getByDate"
+    );
+    return matches.find((entry) => isMeasurementForDate(entry, date)) as BodyMeasurementEntry | null;
   },
 
   async getAll(uid: string): Promise<BodyMeasurementEntry[]> {
     const snaps = await getDocs(col(uid));
-    return snaps.docs
-      .map((d) => d.data() as BodyMeasurementEntry)
-      .sort((a, b) => a.date.localeCompare(b.date));
+    return normalizeMeasurementEntries(
+      snaps.docs.map((d) => d.data() as MirrorMeasurementEntry),
+      "firestore-measurements:getAll"
+    ).sort(compareMeasurementDates) as BodyMeasurementEntry[];
   },
 
   async getRange(uid: string, start: ISODate, end: ISODate): Promise<BodyMeasurementEntry[]> {
-    const q = query(col(uid), where("date", ">=", start), where("date", "<=", end));
-    const snaps = await getDocs(q);
-    return snaps.docs
-      .map((d) => d.data() as BodyMeasurementEntry)
-      .sort((a, b) => a.date.localeCompare(b.date));
+    const [dateSnaps, idSnaps] = await Promise.all([
+      getDocs(query(col(uid), where("date", ">=", start), where("date", "<=", end))),
+      getDocs(query(col(uid), where("id", ">=", start), where("id", "<=", end))),
+    ]);
+    return normalizeMeasurementEntries(
+      [...dateSnaps.docs, ...idSnaps.docs].map((d) => d.data() as MirrorMeasurementEntry),
+      "firestore-measurements:getRange"
+    )
+      .filter((entry) => entry.date >= start && entry.date <= end)
+      .sort(compareMeasurementDates) as BodyMeasurementEntry[];
   },
 
   async upsert(uid: string, entry: BodyMeasurementEntry): Promise<void> {
+    const normalized = normalizeMeasurementEntry(entry as MirrorMeasurementEntry);
+    const key = measurementDocId(normalized);
+    if (!key) {
+      throw new Error("measurement missing stable key");
+    }
+    const docDate = normalized.date as ISODate;
+
     await setDoc(
-      ref(uid, entry.date),
+      ref(uid, docDate),
       {
-        ...entry,
-        createdAt: entry.createdAt ?? serverTimestamp(),
-        loggedAt: entry.loggedAt ?? serverTimestamp(),
+        ...normalized,
+        createdAt: normalized.createdAt ?? serverTimestamp(),
+        loggedAt: normalized.loggedAt ?? serverTimestamp(),
         updatedAt: serverTimestamp(),
       },
       { merge: true }
     );
 
     mirrorBestEffort(
-      cloudMirrorRepo.upsertMeasurement(uid, toMirrorMeasurement(entry)),
-      `measurements/${entry.date}`
+      cloudMirrorRepo.upsertMeasurement(uid, toMirrorMeasurement(normalized as BodyMeasurementEntry)),
+      `measurements/${key}`
     );
   },
 
   async deleteByDate(uid: string, date: ISODate): Promise<void> {
-    await deleteDoc(ref(uid, date));
+    const directSnap = await getDoc(ref(uid, date));
+    const candidateSnaps = [
+      ...(directSnap.exists() ? [directSnap] : []),
+      ...(await getDocs(query(col(uid), where("date", "==", date)))).docs,
+      ...(await getDocs(query(col(uid), where("id", "==", date)))).docs,
+    ];
+    const seenRefs = new Set<string>();
+    for (const snap of candidateSnaps) {
+      if (seenRefs.has(snap.ref.path)) continue;
+      seenRefs.add(snap.ref.path);
+      await deleteDoc(snap.ref);
+    }
     mirrorBestEffort(cloudMirrorRepo.deleteMeasurement(uid, date), `measurements/${date}:delete`);
   },
 };

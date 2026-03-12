@@ -1,5 +1,7 @@
 import type { BodyMeasurementEntry } from "@/lib/models";
+import type { BodyMeasurementEntry as LocalBodyMeasurementEntry } from "@/lib/types";
 import { exportTextFile } from "@/lib/export/fileExport";
+import { compareMeasurementDates, normalizeMeasurementEntries } from "@/lib/adapters/measurementKeyAdapter";
 import { hasAnyNumeric, parseTimestampDate } from "@/lib/measurements/slots";
 
 const INCH_PER_CM = 0.3937007874;
@@ -33,8 +35,9 @@ export function buildMeasurementsCsv(entries: BodyMeasurementEntry[]): string {
     "notes",
   ];
 
-  const rows = entries
-    .filter((e) => hasAnyNumeric(e))
+  const rows = normalizeMeasurementEntries(entries as LocalBodyMeasurementEntry[], "measurements-csv")
+    .sort(compareMeasurementDates)
+    .filter((e) => hasAnyNumeric(e as BodyMeasurementEntry))
     .map((e) => {
       const loggedAt = parseTimestampDate(e.loggedAt) ?? parseTimestampDate(e.createdAt);
       const loggedAtIso = loggedAt ? loggedAt.toISOString() : "";

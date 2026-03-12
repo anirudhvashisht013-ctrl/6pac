@@ -1,19 +1,40 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import type {
   User, DailyLog, MealEntry, WeeklyTarget,
-  WeekSchedule, WorkoutTemplate, WorkoutSession, BodyMeasurementEntry, ExerciseLibraryItem, ReminderState,
-  ReminderSettingsMirrorDoc, DailySummaryMirrorDoc,
+  WeekSchedule, WorkoutTemplate, WorkoutSession, BodyMeasurementEntry, ExerciseLibraryItem, ReminderRuntime, ReminderSettings, ReminderState,
 } from './types';
 import { cloudMirrorRepo } from "@/lib/repos/cloudMirrorRepo";
 import { measurementDocId, normalizeMeasurementEntry } from "@/lib/measurements/identity";
+import { normalizeMeasurementEntries } from "@/lib/adapters/measurementKeyAdapter";
 import { removeSharedWorkoutTemplate, syncSharedWorkoutTemplate } from "@/lib/friends/sharedWorkoutsRepo";
+import {
+  getReminderRuntimeBoundary,
+  getReminderSettingsBoundary,
+  normalizeReminderStateRecord,
+  toReminderSettingsMirrorBoundary,
+} from "@/lib/adapters/reminderStateAdapter";
+import {
+  getWeeklyPlanValidationIssues,
+  type WeeklyPlan,
+  normalizeWeeklyPlan,
+  toWeekSchedule,
+  toWeeklyPlan,
+} from "@/lib/adapters/weeklyPlanAdapter";
+import {
+  normalizeWorkoutSessionRecord,
+  prepareWorkoutSessionForSave,
+} from "@/lib/adapters/workoutSessionSnapshotAdapter";
 import {
   getMeasurementByDate,
   getMeasurementRange,
 } from "@/lib/measurements/localMeasurementsQuery";
 import { emitDataEvent } from "@/lib/dataEvents";
-import { getMondayYMD, getWeekDates, todayYMD } from "@/lib/dates";
+import { todayYMD } from "@/lib/dates";
 import type { ISODate } from "@/lib/models";
+import {
+  refreshDailySummaryProjection,
+  refreshWeeklyDailySummaryProjection,
+} from "@/lib/projections/dailySummaryProjection";
 
 const KEY = {
   users: '@6pac:users',
@@ -46,16 +67,6 @@ function mirrorBestEffort(task: Promise<void>, label: string) {
   });
 }
 
-function toReminderSettingsDoc(state: ReminderState): ReminderSettingsMirrorDoc {
-  return {
-    id: "primary",
-    version: 1,
-    settings: state.settings,
-    createdAt: state.createdAt,
-    updatedAt: state.updatedAt,
-  };
-}
-
 function normalizeTemplate(template: WorkoutTemplate): WorkoutTemplate {
   return {
     ...template,
@@ -65,174 +76,30 @@ function normalizeTemplate(template: WorkoutTemplate): WorkoutTemplate {
 }
 
 function normalizeSession(session: WorkoutSession): WorkoutSession {
-  return {
-    ...session,
-    sessionBlocks: Array.isArray(session.sessionBlocks) ? session.sessionBlocks : undefined,
-    missed: !!session.missed,
-  };
+  return normalizeWorkoutSessionRecord(session, { context: "storage:read" });
 }
 
-function parseIsoMs(value: string | null | undefined): number | null {
-  if (!value) return null;
-  const ms = Date.parse(value);
-  return Number.isNaN(ms) ? null : ms;
-}
-
-function maxIso(values: Array<string | null | undefined>): string | null {
-  let bestMs = Number.NaN;
-  let bestIso: string | null = null;
-  for (const value of values) {
-    const ms = parseIsoMs(value);
-    if (ms == null) continue;
-    if (!Number.isFinite(bestMs) || ms > bestMs) {
-      bestMs = ms;
-      bestIso = new Date(ms).toISOString();
-    }
+function normalizeWeekSchedule(schedule: WeekSchedule): WeekSchedule {
+  const plan = toWeeklyPlan(schedule);
+  const issues = getWeeklyPlanValidationIssues(plan);
+  if (issues.length > 0 && typeof __DEV__ !== "undefined" && __DEV__) {
+    console.warn(
+      `[weekly-plan] validation issues for ${schedule.weekStartDate}`,
+      issues.map((issue) => issue.code)
+    );
   }
-  return bestIso;
+  return toWeekSchedule(normalizeWeeklyPlan(plan));
 }
 
-function sessionDurationMinutes(session: WorkoutSession): number | null {
-  if (!session.endedAt) return null;
-  const startMs = parseIsoMs(session.startedAt);
-  const endMs = parseIsoMs(session.endedAt);
-  if (startMs == null || endMs == null || endMs <= startMs) return null;
-  return Math.round((endMs - startMs) / 60000);
-}
-
-function buildDailySummaryDoc(snapshot: LocalDataSnapshot, date: string): DailySummaryMirrorDoc {
-  const weekStartDate = getMondayYMD(date as ISODate);
-  const log = snapshot.logs.find((x) => x.date === date) || null;
-  const meals = snapshot.meals.filter((x) => x.date === date);
-  const sessions = snapshot.sessions.filter((x) => x.date === date);
-  const target = snapshot.targets.find((x) => x.weekStartDate === weekStartDate) || null;
-  const schedule = snapshot.schedules.find((x) => x.weekStartDate === weekStartDate) || null;
-  const plannedDay = schedule?.days.find((x) => x.date === date) || null;
-
-  let mealCalories = 0;
-  let mealProtein = 0;
-  let mealCarbs = 0;
-  let mealFat = 0;
-  let hasCalories = false;
-  let hasProtein = false;
-  let hasCarbs = false;
-  let hasFat = false;
-
-  for (const meal of meals) {
-    if (meal.calories != null) {
-      hasCalories = true;
-      mealCalories += meal.calories;
-    }
-    if (meal.proteinG != null) {
-      hasProtein = true;
-      mealProtein += meal.proteinG;
-    }
-    if (meal.carbsG != null) {
-      hasCarbs = true;
-      mealCarbs += meal.carbsG;
-    }
-    if (meal.fatG != null) {
-      hasFat = true;
-      mealFat += meal.fatG;
-    }
+function normalizeWeeklyPlanBoundary(plan: WeeklyPlan): WeeklyPlan {
+  const issues = getWeeklyPlanValidationIssues(plan);
+  if (issues.length > 0 && typeof __DEV__ !== "undefined" && __DEV__) {
+    console.warn(
+      `[weekly-plan] validation issues for ${plan.weekStartDate}`,
+      issues.map((issue) => issue.code)
+    );
   }
-
-  const manualCalories = log?.caloriesManual ?? null;
-  const totalCalories =
-    hasCalories || manualCalories != null ? mealCalories + (manualCalories || 0) : null;
-
-  const completedSessions = sessions.filter((x) => x.completed);
-  const missedSessions = sessions.filter((x) => !!x.missed);
-  let totalWorkoutMinutes = 0;
-  let hasWorkoutDuration = false;
-  for (const session of completedSessions) {
-    const minutes = sessionDurationMinutes(session);
-    if (minutes == null) continue;
-    hasWorkoutDuration = true;
-    totalWorkoutMinutes += minutes;
-  }
-  const workoutMinutes =
-    completedSessions.length > 0 ? (hasWorkoutDuration ? totalWorkoutMinutes : null) : null;
-
-  const caloriesOnTarget =
-    target && totalCalories != null
-      ? totalCalories >= target.dailyCaloriesTarget * 0.95 &&
-        totalCalories <= target.dailyCaloriesTarget * 1.05
-      : null;
-  const stepsOnTarget =
-    target && log?.steps != null ? log.steps >= target.dailyStepsTarget : null;
-  const waterOnTarget =
-    target && log?.waterMl != null ? log.waterMl >= target.dailyWaterMlTarget : null;
-  const plannedWorkoutCompleted =
-    plannedDay?.status === "planned_workout" ? completedSessions.length > 0 : null;
-
-  return {
-    id: date,
-    date,
-    version: 1,
-    log: {
-      weightKg: log?.weightKg ?? null,
-      sleepHours: log?.sleepHours ?? null,
-      steps: log?.steps ?? null,
-      waterMl: log?.waterMl ?? null,
-      supplementsTaken: log?.supplementsTaken ?? null,
-      caloriesManual: log?.caloriesManual ?? null,
-      updatedAt: log?.updatedAt ?? null,
-    },
-    nutrition: {
-      mealCount: meals.length,
-      calories: totalCalories,
-      proteinG: hasProtein ? mealProtein : null,
-      carbsG: hasCarbs ? mealCarbs : null,
-      fatG: hasFat ? mealFat : null,
-      lastMealUpdateAt: maxIso(meals.map((x) => x.updatedAt || x.createdAt || null)),
-    },
-    workouts: {
-      totalSessions: sessions.length,
-      completedSessions: completedSessions.length,
-      missedSessions: missedSessions.length,
-      workoutMinutes,
-      sessionIds: sessions.map((x) => x.id),
-      lastSessionUpdateAt: maxIso(
-        sessions.map((x) => x.endedAt || x.startedAt || null)
-      ),
-    },
-    weekly: {
-      weekStartDate,
-      target: {
-        dailyCaloriesTarget: target?.dailyCaloriesTarget ?? null,
-        dailyStepsTarget: target?.dailyStepsTarget ?? null,
-        dailyWaterMlTarget: target?.dailyWaterMlTarget ?? null,
-        targetWeightKg: target?.targetWeightKg ?? null,
-        weightGoalType: target?.weightGoalType ?? null,
-        updatedAt: target?.updatedAt ?? null,
-      },
-      plan: {
-        status: plannedDay?.status ?? null,
-        workoutTemplateId: plannedDay?.workoutTemplateId ?? null,
-      },
-    },
-    tallies: {
-      caloriesOnTarget,
-      stepsOnTarget,
-      waterOnTarget,
-      plannedWorkoutCompleted,
-    },
-    updatedAt: new Date().toISOString(),
-  };
-}
-
-async function syncDailySummary(uid: string, date: string, snapshot?: LocalDataSnapshot): Promise<void> {
-  const source = snapshot || (await localCacheRepo.getSnapshot(uid));
-  const summary = buildDailySummaryDoc(source, date);
-  await cloudMirrorRepo.upsertDailySummary(uid, summary);
-}
-
-async function syncWeekDailySummaries(uid: string, weekStartDate: string): Promise<void> {
-  const source = await localCacheRepo.getSnapshot(uid);
-  for (const date of getWeekDates(weekStartDate as ISODate)) {
-    await syncDailySummary(uid, date, source);
-  }
+  return normalizeWeeklyPlan(plan);
 }
 
 export type LocalDataSnapshot = {
@@ -247,6 +114,21 @@ export type LocalDataSnapshot = {
   reminders: ReminderState | null;
 };
 
+async function syncDailySummary(uid: string, date: string, snapshot?: LocalDataSnapshot): Promise<void> {
+  await refreshDailySummaryProjection(uid, date, {
+    getSnapshot: (targetUid) => localCacheRepo.getSnapshot(targetUid),
+    snapshot,
+  });
+}
+
+async function syncWeekDailySummaries(uid: string, weekStartDate: string): Promise<void> {
+  await refreshWeeklyDailySummaryProjection(uid, weekStartDate, {
+    getSnapshot: (targetUid) => localCacheRepo.getSnapshot(targetUid),
+  });
+}
+
+// Infrastructure repo: composite local snapshot over the local-first domain repos.
+// This is not a canonical business entity boundary.
 export const localCacheRepo = {
   async getSnapshot(uid: string): Promise<LocalDataSnapshot> {
     const [logs, meals, targets, schedules, templates, exercises, sessions, measurements, reminders] = await Promise.all([
@@ -289,6 +171,8 @@ export const localCacheRepo = {
   },
 };
 
+// Legacy local-auth cache repo kept for backward compatibility only.
+// Account profile truth now lives in Firestore via accountProfileRepo.
 export const usersRepo = {
   async getAll(): Promise<User[]> {
     return (await get<User[]>(KEY.users)) || [];
@@ -310,6 +194,7 @@ export const usersRepo = {
   },
 };
 
+// Legacy auth-session token repo. This is unrelated to workout execution sessions.
 export const sessionRepo = {
   async getToken(): Promise<string | null> {
     return AsyncStorage.getItem(KEY.sessionToken);
@@ -326,6 +211,8 @@ export const sessionRepo = {
   },
 };
 
+// Canonical local-first repo for DailyCheckIn records.
+// Owns one date-keyed daily check-in row; does not own nutrition or workout summaries.
 export const logsRepo = {
   async getAll(uid: string): Promise<DailyLog[]> {
     return (await get<DailyLog[]>(KEY.logs(uid))) || [];
@@ -352,6 +239,8 @@ export const logsRepo = {
   },
 };
 
+// Canonical local-first repo for WeeklyTarget records.
+// Owns weekly goal settings only; not weekly planning or execution.
 export const targetsRepo = {
   async getAll(uid: string): Promise<WeeklyTarget[]> {
     return (await get<WeeklyTarget[]>(KEY.targets(uid))) || [];
@@ -375,29 +264,51 @@ export const targetsRepo = {
   },
 };
 
-export const schedulesRepo = {
-  async getAll(uid: string): Promise<WeekSchedule[]> {
-    return (await get<WeekSchedule[]>(KEY.schedules(uid))) || [];
+// Canonical local-first repo for WeeklyPlan with embedded DayAssignment[].
+// Owns planner state only; execution truth lives in WorkoutSession.
+export const weeklyPlanRepo = {
+  async getAll(uid: string): Promise<WeeklyPlan[]> {
+    const raw = (await get<WeekSchedule[]>(KEY.schedules(uid))) || [];
+    return raw.map((schedule) => normalizeWeeklyPlanBoundary(toWeeklyPlan(schedule)));
   },
-  async getByWeek(uid: string, weekStartDate: string): Promise<WeekSchedule | null> {
+  async getByWeek(uid: string, weekStartDate: string): Promise<WeeklyPlan | null> {
     const all = await this.getAll(uid);
-    return all.find(s => s.weekStartDate === weekStartDate) || null;
+    return all.find((plan) => plan.weekStartDate === weekStartDate) || null;
   },
-  async save(uid: string, schedule: WeekSchedule): Promise<void> {
+  async save(uid: string, plan: WeeklyPlan): Promise<void> {
+    const normalizedPlan = normalizeWeeklyPlanBoundary(plan);
+    const normalizedSchedule = toWeekSchedule(normalizedPlan);
     const all = await this.getAll(uid);
-    const idx = all.findIndex(s => s.weekStartDate === schedule.weekStartDate);
-    if (idx >= 0) all[idx] = schedule;
-    else all.push(schedule);
-    await set(KEY.schedules(uid), all);
+    const idx = all.findIndex((item) => item.weekStartDate === normalizedPlan.weekStartDate);
+    if (idx >= 0) all[idx] = normalizedPlan;
+    else all.push(normalizedPlan);
+    await set(KEY.schedules(uid), all.map(toWeekSchedule));
     emitDataEvent(uid, "schedules");
-    mirrorBestEffort(cloudMirrorRepo.upsertSchedule(uid, schedule), `schedules/${schedule.weekStartDate}`);
+    mirrorBestEffort(cloudMirrorRepo.upsertSchedule(uid, normalizedSchedule), `schedules/${normalizedSchedule.weekStartDate}`);
     mirrorBestEffort(
-      syncWeekDailySummaries(uid, schedule.weekStartDate),
-      `daily_summaries/${schedule.weekStartDate}:plans`
+      syncWeekDailySummaries(uid, normalizedSchedule.weekStartDate),
+      `daily_summaries/${normalizedSchedule.weekStartDate}:plans`
     );
   },
 };
 
+// Compatibility alias for older WeekSchedule naming. Same storage, same behavior.
+export const schedulesRepo = {
+  async getAll(uid: string): Promise<WeekSchedule[]> {
+    const plans = await weeklyPlanRepo.getAll(uid);
+    return plans.map(toWeekSchedule);
+  },
+  async getByWeek(uid: string, weekStartDate: string): Promise<WeekSchedule | null> {
+    const plan = await weeklyPlanRepo.getByWeek(uid, weekStartDate);
+    return plan ? toWeekSchedule(plan) : null;
+  },
+  async save(uid: string, schedule: WeekSchedule): Promise<void> {
+    await weeklyPlanRepo.save(uid, toWeeklyPlan(schedule));
+  },
+};
+
+// Canonical local-first repo for WorkoutTemplate authoring data.
+// Does not own assignment state or execution history.
 export const workoutsRepo = {
   async getAll(uid: string): Promise<WorkoutTemplate[]> {
     const raw = (await get<WorkoutTemplate[]>(KEY.templates(uid))) || [];
@@ -442,6 +353,8 @@ export const workoutsRepo = {
   },
 };
 
+// Canonical local-first repo for ExerciseLibraryItem definitions.
+// Templates may snapshot exercise fields, but this repo owns the library source rows.
 export const exercisesRepo = {
   async getAll(uid: string): Promise<ExerciseLibraryItem[]> {
     return (await get<ExerciseLibraryItem[]>(KEY.exercises(uid))) || [];
@@ -467,6 +380,8 @@ export const exercisesRepo = {
   },
 };
 
+// Canonical local-first repo for NutritionEntry rows.
+// Daily totals remain derived and are not owned here.
 export const mealsRepo = {
   async getAll(uid: string): Promise<MealEntry[]> {
     return (await get<MealEntry[]>(KEY.meals(uid))) || [];
@@ -497,6 +412,9 @@ export const mealsRepo = {
   },
 };
 
+// Canonical local-first repo for WorkoutSession execution records.
+// Planner state stays in WeeklyPlan / DayAssignment; execution truth must not be inferred
+// back into planning storage.
 export const sessionsRepo = {
   async getAll(uid: string): Promise<WorkoutSession[]> {
     const raw = (await get<WorkoutSession[]>(KEY.sessions(uid))) || [];
@@ -538,8 +456,12 @@ export const sessionsRepo = {
     return all.filter(s => s.date === date);
   },
   async save(uid: string, session: WorkoutSession, opts?: { syncToCloud?: boolean }): Promise<void> {
-    const normalizedSession = normalizeSession(session);
     const all = await this.getAll(uid);
+    const existingSession = all.find((item) => item.id === session.id) || null;
+    const normalizedSession = prepareWorkoutSessionForSave(session, {
+      existingSession,
+      context: "storage:save",
+    });
     const idx = all.findIndex(s => s.id === normalizedSession.id);
     if (idx >= 0) all[idx] = normalizedSession;
     else all.push(normalizedSession);
@@ -551,10 +473,12 @@ export const sessionsRepo = {
   },
 };
 
+// Canonical local-first repo for BodyMeasurementEntry records.
+// Owns scheduled-slot measurement entries; trend/progress views remain derived.
 export const measurementsRepo = {
   async getAll(uid: string): Promise<BodyMeasurementEntry[]> {
     const all = (await get<BodyMeasurementEntry[]>(KEY.measurements(uid))) || [];
-    return all.map(normalizeMeasurementEntry);
+    return normalizeMeasurementEntries(all.map(normalizeMeasurementEntry), "storage:getAll");
   },
   async getByDate(uid: string, date: string): Promise<BodyMeasurementEntry | null> {
     const all = await this.getAll(uid);
@@ -593,21 +517,49 @@ export const measurementsRepo = {
   },
 };
 
+// Hybrid repo for bundled reminder state.
+// Owns local ReminderSettings + ReminderRuntime persistence shape for v1, while cloud sync
+// mirrors only the settings boundary.
 export const remindersRepo = {
   async get(uid: string): Promise<ReminderState | null> {
-    return get<ReminderState>(KEY.reminders(uid));
+    const raw = await get<ReminderState>(KEY.reminders(uid));
+    return raw ? normalizeReminderStateRecord(raw, "storage:get") : null;
   },
   async saveLocal(uid: string, state: ReminderState): Promise<void> {
-    await set(KEY.reminders(uid), state);
+    await set(KEY.reminders(uid), normalizeReminderStateRecord(state, "storage:saveLocal"));
     emitDataEvent(uid, "reminders");
+  },
+  async getSettings(uid: string): Promise<ReminderSettings> {
+    return getReminderSettingsBoundary(await this.get(uid), "storage:getSettings");
+  },
+  async getRuntime(uid: string): Promise<ReminderRuntime> {
+    return getReminderRuntimeBoundary(await this.get(uid), "storage:getRuntime");
   },
   async syncSettings(uid: string, state: ReminderState): Promise<void> {
     mirrorBestEffort(
-      cloudMirrorRepo.upsertReminderSettings(uid, toReminderSettingsDoc(state)),
+      cloudMirrorRepo.upsertReminderSettings(uid, toReminderSettingsMirrorBoundary(state)),
       "reminders/primary:settings"
     );
   },
   async save(uid: string, state: ReminderState): Promise<void> {
-    await this.saveLocal(uid, state);
+    await this.saveLocal(uid, normalizeReminderStateRecord(state, "storage:save"));
   },
 };
+
+// Target-facing domain repo aliases.
+// These keep current runtime/storage behavior unchanged while letting new code speak the
+// target architecture language.
+export const dailyCheckInRepo = logsRepo;
+export const nutritionEntryRepo = mealsRepo;
+export const weeklyTargetRepo = targetsRepo;
+export const workoutTemplateRepo = workoutsRepo;
+export const exerciseLibraryRepo = exercisesRepo;
+export const workoutSessionRepo = sessionsRepo;
+export const workoutExecutionRepo = sessionsRepo;
+export const bodyMeasurementRepo = measurementsRepo;
+export const reminderStateRepo = remindersRepo;
+
+// Infrastructure / compatibility aliases.
+export const localSnapshotRepo = localCacheRepo;
+export const legacyLocalUserRepo = usersRepo;
+export const localAuthSessionRepo = sessionRepo;

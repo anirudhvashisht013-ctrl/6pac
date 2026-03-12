@@ -1,29 +1,44 @@
 import { getFirebaseDb } from "@/lib/firebase";
 import { doc, getDoc, setDoc, serverTimestamp } from "firebase/firestore";
+import {
+  getAccountProfileBridgeBoundary,
+  getAccountProfileCoreBoundary,
+  getAccountProfileProjectionBoundary,
+  toAccountProfileBoundary,
+  toAccountProfileDocument,
+  type AccountProfileBoundary,
+  type AccountProfileBridgeFields,
+  type AccountProfileCore,
+  type AccountProfileDocument,
+  type AccountProfileProjectionFields,
+} from "@/lib/adapters/accountProfileAdapter";
 
-export type UserProfileDoc = {
-  uid: string;
-  email: string;
-  friendRefId?: string;
-  onboardingDone: boolean;
-  fullName?: string;
-  dateOfBirth?: string;
-  sex?: "male" | "female" | "other";
-  currentWeightKg?: number;
-  goalType?: "lean" | "recomp" | "buffed";
-  createdAt?: any;
-  updatedAt?: any;
-
-  // streak tracking
-  currentStreakDays?: number;
-  maxStreakDays?: number;
-};
+export type UserProfileDoc = AccountProfileDocument;
 
 const userDocRef = (uid: string) => doc(getFirebaseDb(), "users", uid);
 
 export async function getUserProfile(uid: string): Promise<UserProfileDoc | null> {
   const snap = await getDoc(userDocRef(uid));
-  return snap.exists() ? (snap.data() as UserProfileDoc) : null;
+  if (!snap.exists()) return null;
+  return toAccountProfileDocument(snap.data() as Partial<UserProfileDoc>, "userProfile:get");
+}
+
+export async function getAccountProfileBoundary(uid: string): Promise<AccountProfileBoundary | null> {
+  return toAccountProfileBoundary(await getUserProfile(uid), "userProfile:boundary");
+}
+
+export async function getAccountProfileCore(uid: string): Promise<AccountProfileCore | null> {
+  return getAccountProfileCoreBoundary(await getUserProfile(uid), "userProfile:core");
+}
+
+export async function getAccountProfileBridge(uid: string): Promise<AccountProfileBridgeFields | null> {
+  return getAccountProfileBridgeBoundary(await getUserProfile(uid), "userProfile:bridge");
+}
+
+export async function getAccountProfileProjection(
+  uid: string
+): Promise<AccountProfileProjectionFields | null> {
+  return getAccountProfileProjectionBoundary(await getUserProfile(uid), "userProfile:projection");
 }
 
 /**
@@ -96,3 +111,18 @@ export async function updateUserProfile(
     { merge: true }
   );
 }
+
+// Target-facing repo contract for AccountProfile semantics.
+// Owns private account/onboarding/profile state on users/{uid}.
+// Does not own public identity claims or derived streak projections long-term, even though
+// some bridge/projection fields still live on the same physical doc in v1.
+export const accountProfileRepo = {
+  get: getUserProfile,
+  getBoundary: getAccountProfileBoundary,
+  getCore: getAccountProfileCore,
+  getBridge: getAccountProfileBridge,
+  getProjection: getAccountProfileProjection,
+  ensureExists: ensureUserProfile,
+  markOnboardingDone,
+  update: updateUserProfile,
+};

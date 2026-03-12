@@ -14,7 +14,7 @@ import {
   signOut,
   type FirebaseUser,
 } from "@/lib/firebase";
-import { ensureUserProfile, getUserProfile, markOnboardingDone } from "@/lib/userProfile";
+import { ensureUserProfile, getAccountProfileCore, markOnboardingDone } from "@/lib/userProfile";
 import { ensureAutoBackupOnce } from "@/lib/backup/autoBackupOnce";
 import { reconcileCloudToLocal } from "@/lib/sync/reconcile";
 import { syncNow } from "@/lib/sync/syncNow";
@@ -118,7 +118,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           }
 
           // Read profile to determine onboardingDone
-          const profile = await getUserProfile(uid);
+          const profile = await getAccountProfileCore(uid);
           setIsProfileComplete(!!profile?.onboardingDone);
 
           // Fire-and-forget: run once per user/device after login restore.
@@ -194,7 +194,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
     // Update completeness right away
     try {
-      const profile = await getUserProfile(uid);
+      const profile = await getAccountProfileCore(uid);
       setIsProfileComplete(!!profile?.onboardingDone);
     } catch {
       setIsProfileComplete(false);

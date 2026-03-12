@@ -146,8 +146,13 @@ export const cloudMirrorRepo = {
     await upsertWithQueue(uid, mirrorCollections.workoutSessions, session.id, session);
   },
 
-  async upsertDailySummary(uid: string, summary: DailySummaryMirrorDoc): Promise<void> {
+  async upsertDailySummaryProjection(uid: string, summary: DailySummaryMirrorDoc): Promise<void> {
     await upsertWithQueue(uid, mirrorCollections.dailySummaries, summary.date, summary);
+  },
+
+  // Compatibility alias while callers migrate to projection terminology.
+  async upsertDailySummary(uid: string, summary: DailySummaryMirrorDoc): Promise<void> {
+    await this.upsertDailySummaryProjection(uid, summary);
   },
 
   async upsertMeasurement(uid: string, entry: BodyMeasurementEntry): Promise<void> {

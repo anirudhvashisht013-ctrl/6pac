@@ -17,6 +17,8 @@ import {
 import { getFirebaseDb } from "@/lib/firebase";
 import { workoutsRepo } from "@/lib/storage";
 import type { WorkoutTemplate } from "@/lib/types";
+import { toAccountProfileBoundary } from "@/lib/adapters/accountProfileAdapter";
+import { toPublicIdentityClaimBoundary } from "@/lib/adapters/publicIdentityClaimAdapter";
 import { generateFriendRefId, isValidFriendRefId, normalizeFriendRefId } from "@/lib/friends/id";
 import type {
   FriendActionResult,
@@ -129,15 +131,53 @@ function normalizeRefFromUnknown(raw: unknown): string | null {
   return isValidFriendRefId(normalized) ? normalized : null;
 }
 
+async function getPublicIdentityClaimForUid(
+  uid: string,
+  hintedFriendRefId?: string | null
+): Promise<string | null> {
+  const hinted = normalizeRefFromUnknown(hintedFriendRefId);
+  if (hinted) {
+    const hintedSnap = await getDoc(doc(getFirebaseDb(), FRIEND_REFS_COLLECTION, hinted));
+    const hintedBoundary = toPublicIdentityClaimBoundary(
+      (hintedSnap.data() || {}) as Record<string, unknown>,
+      "friends:hinted-public-identity"
+    );
+    if (hintedSnap.exists() && hintedBoundary?.claim.uid === uid) {
+      return normalizeRefFromUnknown(hintedBoundary.claim.friendRefId);
+    }
+  }
+
+  const claimSnaps = await getDocs(
+    query(collection(getFirebaseDb(), FRIEND_REFS_COLLECTION), where("uid", "==", uid))
+  );
+  const firstClaim = claimSnaps.docs[0];
+  if (!firstClaim) {
+    return hinted || null;
+  }
+
+  const boundary = toPublicIdentityClaimBoundary(
+    (firstClaim.data() || {}) as Record<string, unknown>,
+    "friends:public-identity-query"
+  );
+
+  return normalizeRefFromUnknown(boundary?.claim.friendRefId) || hinted || null;
+}
+
 async function getUserSummary(uid: string): Promise<FriendUserSummary> {
   const profileSnap = await getDoc(doc(getFirebaseDb(), "users", uid));
-  const profile = (profileSnap.data() || {}) as Record<string, unknown>;
+  const boundary = toAccountProfileBoundary(
+    (profileSnap.data() || {}) as Record<string, unknown>,
+    "friends:user-summary"
+  );
+  const publicFriendRefId = await getPublicIdentityClaimForUid(uid, boundary?.bridge.friendRefId);
 
   return {
     uid,
-    fullName: typeof profile.fullName === "string" ? profile.fullName : null,
-    email: typeof profile.email === "string" ? profile.email : null,
-    friendRefId: normalizeRefFromUnknown(profile.friendRefId),
+    fullName: boundary?.core.fullName || null,
+    email: boundary?.core.email || null,
+    // Public discoverability should prefer the public identity claim store.
+    // users/{uid}.friendRefId remains a tolerated bridge field for bootstrap convenience.
+    friendRefId: publicFriendRefId,
   };
 }
 
@@ -304,8 +344,11 @@ export async function ensureMyFriendRefId(uid: string): Promise<string> {
     try {
       const claimed = await runTransaction(getFirebaseDb(), async (tx) => {
         const userSnap = await tx.get(userRef);
-        const profile = (userSnap.data() || {}) as Record<string, unknown>;
-        const existing = normalizeRefFromUnknown(profile.friendRefId);
+        const profileBoundary = toAccountProfileBoundary(
+          (userSnap.data() || {}) as Record<string, unknown>,
+          "friends:ensure-my-friend-ref"
+        );
+        const existing = normalizeRefFromUnknown(profileBoundary?.bridge.friendRefId);
 
         if (existing) {
           const existingRef = doc(getFirebaseDb(), FRIEND_REFS_COLLECTION, existing);
@@ -324,7 +367,7 @@ export async function ensureMyFriendRefId(uid: string): Promise<string> {
               { merge: true }
             );
 
-            if (profile.friendRefId !== existing) {
+            if (profileBoundary?.bridge.friendRefId !== existing) {
               tx.set(
                 userRef,
                 {
@@ -871,3 +914,11 @@ export async function loadCopiedTemplateIdsFromOwner(copierUid: string, ownerUid
 export async function removeStaleSharedWorkoutDoc(ownerUid: string, templateId: string): Promise<void> {
   await deleteDoc(doc(getFirebaseDb(), SHARED_WORKOUTS_COLLECTION, `${ownerUid}__${templateId}`));
 }
+
+// Target-facing service boundary for public discoverability / public identity claims.
+// PublicIdentityClaim ownership lives in friend_refs_v1. users/{uid}.friendRefId remains a
+// tolerated bootstrap bridge field in v1 and should not be treated as the canonical public store.
+export const publicIdentityClaimService = {
+  ensureForUser: ensureMyFriendRefId,
+  searchByFriendRefId: searchUserByFriendRefId,
+};

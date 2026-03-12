@@ -34,6 +34,8 @@ export default function ProfileHubScreen() {
   const [loadingProfile, setLoadingProfile] = useState(true);
   const [seeding, setSeeding] = useState(false);
   const [exportingCsv, setExportingCsv] = useState(false);
+  const [manualSyncing, setManualSyncing] = useState(false);
+  const [manualSyncError, setManualSyncError] = useState<string | null>(null);
   const [showLogoutModal, setShowLogoutModal] = useState(false);
   const [logoutSyncing, setLogoutSyncing] = useState(false);
   const [logoutError, setLogoutError] = useState<string | null>(null);
@@ -98,6 +100,24 @@ export default function ProfileHubScreen() {
       setExportingCsv(false);
     }
   }, [user]);
+
+  const onSyncNow = useCallback(async () => {
+    if (!user) return;
+    if (!network.isOnline) {
+      setManualSyncError("You're offline right now. Reconnect to sync.");
+      return;
+    }
+
+    try {
+      setManualSyncError(null);
+      setManualSyncing(true);
+      await syncNow(user.id);
+    } catch {
+      setManualSyncError("Sync failed. Please try again.");
+    } finally {
+      setManualSyncing(false);
+    }
+  }, [network.isOnline, user]);
 
   const onLogoutPress = useCallback(() => {
     setLogoutError(null);
@@ -287,29 +307,53 @@ export default function ProfileHubScreen() {
         <Text style={styles.sectionTitle}>Account</Text>
 
         <View style={styles.syncCard}>
-          <View style={styles.syncCardLeft}>
-            <Ionicons
-              name={
-                !network.isOnline
-                  ? "cloud-offline-outline"
-                  : sync.pendingCount > 0
-                    ? "sync-outline"
-                    : "cloud-done-outline"
-              }
-              size={18}
-              color={
-                !network.isOnline
-                  ? C.warning
-                  : sync.pendingCount > 0
+          <View style={styles.syncCardTopRow}>
+            <View style={styles.syncCardLeft}>
+              <Ionicons
+                name={
+                  !network.isOnline
+                    ? "cloud-offline-outline"
+                    : sync.pendingCount > 0
+                      ? "sync-outline"
+                      : "cloud-done-outline"
+                }
+                size={18}
+                color={
+                  !network.isOnline
                     ? C.warning
-                    : C.success
-              }
-            />
-            <View style={{ flex: 1 }}>
-              <Text style={styles.syncTitle}>{syncTitle}</Text>
-              <Text style={styles.syncSubtitle}>{syncSubtitle}</Text>
+                    : sync.pendingCount > 0
+                      ? C.warning
+                      : C.success
+                }
+              />
+              <View style={{ flex: 1 }}>
+                <Text style={styles.syncTitle}>{syncTitle}</Text>
+                <Text style={styles.syncSubtitle}>{syncSubtitle}</Text>
+              </View>
             </View>
+
+            <Pressable
+              style={({ pressed }) => [
+                styles.syncNowBtn,
+                (!network.isOnline || manualSyncing || sync.syncing) && styles.syncNowBtnDisabled,
+                pressed && { opacity: 0.85 },
+              ]}
+              onPress={onSyncNow}
+              disabled={!network.isOnline || manualSyncing || sync.syncing}
+            >
+              {manualSyncing || sync.syncing ? (
+                <ActivityIndicator size="small" color={C.primary} />
+              ) : (
+                <Ionicons name="sync-outline" size={14} color={C.primary} />
+              )}
+              <Text style={styles.syncNowBtnText}>{manualSyncing || sync.syncing ? "Syncing..." : "Sync Now"}</Text>
+            </Pressable>
           </View>
+
+          {manualSyncError ? <Text style={styles.syncErrorText}>{manualSyncError}</Text> : null}
+          {!manualSyncError && sync.lastError ? (
+            <Text style={styles.syncErrorText}>Last sync error: {sync.lastError}</Text>
+          ) : null}
         </View>
 
         <View style={styles.actionsWrap}>
@@ -510,13 +554,44 @@ const styles = StyleSheet.create({
     padding: 14,
     marginBottom: 12,
   },
-  syncCardLeft: {
+  syncCardTopRow: {
     flexDirection: "row",
     alignItems: "center",
     gap: 10,
   },
+  syncCardLeft: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
+    flex: 1,
+  },
   syncTitle: { fontFamily: "Outfit_600SemiBold", fontSize: 14, color: C.text },
   syncSubtitle: { fontFamily: "Outfit_400Regular", fontSize: 12, color: C.textMuted, marginTop: 2 },
+  syncNowBtn: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    backgroundColor: C.primaryBg,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: C.primary + "60",
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+  },
+  syncNowBtnDisabled: {
+    opacity: 0.6,
+  },
+  syncNowBtnText: {
+    fontFamily: "Outfit_600SemiBold",
+    fontSize: 12,
+    color: C.primary,
+  },
+  syncErrorText: {
+    fontFamily: "Outfit_500Medium",
+    fontSize: 12,
+    color: C.error,
+    marginTop: 8,
+  },
 
   dangerBtn: { backgroundColor: "transparent", borderColor: "#ff4d4d" + "80" },
   dangerText: { color: "#ff4d4d" },

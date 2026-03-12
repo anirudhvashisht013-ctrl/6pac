@@ -7,6 +7,12 @@ import {
 } from "@/lib/storage";
 import { measurementDocId, normalizeMeasurementEntry } from "@/lib/measurements/identity";
 import { mergeReminderStateDefaults } from "@/lib/reminders/defaults";
+import {
+  getMirrorReadCollections,
+  mirrorCollections,
+  toCanonicalMirrorCollectionName,
+  type MirrorCollectionName,
+} from "@/lib/sync/mirrorSchema";
 import type {
   BodyMeasurementEntry,
   DailyLog,
@@ -23,24 +29,13 @@ import type {
 type ReconcileCheckpoint = {
   lastFullSyncAt: string;
   mergedCounts: Record<string, number>;
-  collectionCursors?: Partial<Record<MirrorCollectionName, string>>;
+  collectionCursors?: Record<string, string>;
 };
 type TombstoneDoc = {
   collectionName: string;
   docId: string;
   deletedAt: unknown;
 };
-type MirrorCollectionName =
-  | "logs_v1"
-  | "meals_v1"
-  | "targets_v1"
-  | "schedules_v1"
-  | "templates_v1"
-  | "exercises_v1"
-  | "sessions_v1"
-  | "measurements_local_v1"
-  | "reminders_v1"
-  | "tombstones_v1";
 type FetchResult<T> = {
   items: T[];
   cursor: string | undefined;
@@ -143,31 +138,48 @@ function applyTombstones<T extends object>(
 
 async function fetchMirrorCollection<T extends object>(
   uid: string,
-  name: Exclude<MirrorCollectionName, "tombstones_v1">,
+  name: Exclude<MirrorCollectionName, typeof mirrorCollections.syncTombstones>,
   cursorIso?: string
 ): Promise<FetchResult<T>> {
-  const col = collection(getFirebaseDb(), "users", uid, name);
   const cursorMs = cursorIso ? Date.parse(cursorIso) : Number.NaN;
-
-  const snaps =
-    cursorIso && Number.isFinite(cursorMs)
-      ? await getDocs(query(col, where("mirroredAt", ">", Timestamp.fromMillis(cursorMs))))
-      : await getDocs(col);
-
-  const items: T[] = [];
+  const mergedByDocId = new Map<string, { item: T; mirroredAtMs: number | null }>();
   let maxMs = Number.isFinite(cursorMs) ? cursorMs : Number.NaN;
 
-  for (const d of snaps.docs) {
-    const raw = d.data() as any;
-    const m = toMillis(raw?.mirroredAt);
-    if (m != null) {
-      if (!Number.isFinite(maxMs) || m > maxMs) maxMs = m;
+  for (const readName of getMirrorReadCollections(name)) {
+    const col = collection(getFirebaseDb(), "users", uid, readName);
+    const snaps =
+      cursorIso && Number.isFinite(cursorMs)
+        ? await getDocs(query(col, where("mirroredAt", ">", Timestamp.fromMillis(cursorMs))))
+        : await getDocs(col);
+
+    for (const d of snaps.docs) {
+      const raw = d.data() as any;
+      const m = toMillis(raw?.mirroredAt);
+      if (m != null) {
+        if (!Number.isFinite(maxMs) || m > maxMs) maxMs = m;
+      }
+
+      const prev = mergedByDocId.get(d.id);
+      if (!prev) {
+        mergedByDocId.set(d.id, {
+          item: stripMirrorFields(raw as T),
+          mirroredAtMs: m,
+        });
+        continue;
+      }
+
+      const prevTs = prev.mirroredAtMs;
+      if (prevTs == null || (m != null && m >= prevTs)) {
+        mergedByDocId.set(d.id, {
+          item: stripMirrorFields(raw as T),
+          mirroredAtMs: m,
+        });
+      }
     }
-    items.push(stripMirrorFields(raw as T));
   }
 
   return {
-    items,
+    items: Array.from(mergedByDocId.values()).map((x) => x.item),
     cursor: Number.isFinite(maxMs) ? new Date(maxMs).toISOString() : cursorIso,
   };
 }
@@ -176,27 +188,58 @@ async function fetchTombstones(
   uid: string,
   cursorIso?: string
 ): Promise<FetchResult<TombstoneDoc>> {
-  const col = collection(getFirebaseDb(), "users", uid, "tombstones_v1");
-  const snaps =
-    cursorIso
-      ? await getDocs(query(col, where("deletedAt", ">", cursorIso)))
-      : await getDocs(col);
-
-  const items: TombstoneDoc[] = [];
+  const mergedByDocId = new Map<string, TombstoneDoc>();
   let cursor = cursorIso;
 
-  for (const d of snaps.docs) {
-    const raw = stripMirrorFields(d.data() as TombstoneDoc);
-    items.push(raw);
+  for (const readName of getMirrorReadCollections(mirrorCollections.syncTombstones)) {
+    const col = collection(getFirebaseDb(), "users", uid, readName);
+    const snaps =
+      cursorIso
+        ? await getDocs(query(col, where("deletedAt", ">", cursorIso)))
+        : await getDocs(col);
 
-    const ts = toMillis(raw.deletedAt);
-    if (ts != null) {
-      const iso = new Date(ts).toISOString();
-      if (!cursor || iso > cursor) cursor = iso;
+    for (const d of snaps.docs) {
+      const raw = stripMirrorFields(d.data() as TombstoneDoc);
+      const prev = mergedByDocId.get(d.id);
+
+      if (!prev) {
+        mergedByDocId.set(d.id, raw);
+      } else {
+        const prevTs = toMillis(prev.deletedAt);
+        const nextTs = toMillis(raw.deletedAt);
+        if (prevTs == null || (nextTs != null && nextTs >= prevTs)) {
+          mergedByDocId.set(d.id, raw);
+        }
+      }
+
+      const ts = toMillis(raw.deletedAt);
+      if (ts != null) {
+        const iso = new Date(ts).toISOString();
+        if (!cursor || iso > cursor) cursor = iso;
+      }
     }
   }
 
-  return { items, cursor };
+  return { items: Array.from(mergedByDocId.values()), cursor };
+}
+
+function pickCollectionCursor(
+  cursors: Record<string, string>,
+  name: MirrorCollectionName
+): string | undefined {
+  let best: string | undefined;
+  let bestMs = Number.NaN;
+  for (const candidateName of getMirrorReadCollections(name)) {
+    const candidate = cursors[candidateName];
+    if (!candidate) continue;
+    const ms = Date.parse(candidate);
+    if (Number.isNaN(ms)) continue;
+    if (!Number.isFinite(bestMs) || ms > bestMs) {
+      best = candidate;
+      bestMs = ms;
+    }
+  }
+  return best;
 }
 
 async function readCheckpoint(uid: string): Promise<ReconcileCheckpoint | null> {
@@ -278,7 +321,7 @@ export async function reconcileCloudToLocal(
   const force = !!opts?.force;
   const cp = await readCheckpoint(uid);
   if (!force && shouldSkipByCheckpoint(cp)) return;
-  const cursors = cp?.collectionCursors || {};
+  const cursors: Record<string, string> = cp?.collectionCursors || {};
 
   const local = await localCacheRepo.getSnapshot(uid);
 
@@ -294,16 +337,55 @@ export async function reconcileCloudToLocal(
     remindersRes,
     tombstonesRes,
   ] = await Promise.all([
-    fetchMirrorCollection<DailyLog>(uid, "logs_v1", force ? undefined : cursors.logs_v1),
-    fetchMirrorCollection<MealEntry>(uid, "meals_v1", force ? undefined : cursors.meals_v1),
-    fetchMirrorCollection<WeeklyTarget>(uid, "targets_v1", force ? undefined : cursors.targets_v1),
-    fetchMirrorCollection<WeekSchedule>(uid, "schedules_v1", force ? undefined : cursors.schedules_v1),
-    fetchMirrorCollection<WorkoutTemplate>(uid, "templates_v1", force ? undefined : cursors.templates_v1),
-    fetchMirrorCollection<ExerciseLibraryItem>(uid, "exercises_v1", force ? undefined : cursors.exercises_v1),
-    fetchMirrorCollection<WorkoutSession>(uid, "sessions_v1", force ? undefined : cursors.sessions_v1),
-    fetchMirrorCollection<BodyMeasurementEntry>(uid, "measurements_local_v1", force ? undefined : cursors.measurements_local_v1),
-    fetchMirrorCollection<ReminderSettingsMirrorDoc>(uid, "reminders_v1", force ? undefined : cursors.reminders_v1),
-    fetchTombstones(uid, force ? undefined : cursors.tombstones_v1),
+    fetchMirrorCollection<DailyLog>(
+      uid,
+      mirrorCollections.dailyLogs,
+      force ? undefined : pickCollectionCursor(cursors, mirrorCollections.dailyLogs)
+    ),
+    fetchMirrorCollection<MealEntry>(
+      uid,
+      mirrorCollections.nutritionEntries,
+      force ? undefined : pickCollectionCursor(cursors, mirrorCollections.nutritionEntries)
+    ),
+    fetchMirrorCollection<WeeklyTarget>(
+      uid,
+      mirrorCollections.weeklyTargets,
+      force ? undefined : pickCollectionCursor(cursors, mirrorCollections.weeklyTargets)
+    ),
+    fetchMirrorCollection<WeekSchedule>(
+      uid,
+      mirrorCollections.weeklyPlans,
+      force ? undefined : pickCollectionCursor(cursors, mirrorCollections.weeklyPlans)
+    ),
+    fetchMirrorCollection<WorkoutTemplate>(
+      uid,
+      mirrorCollections.workoutTemplates,
+      force ? undefined : pickCollectionCursor(cursors, mirrorCollections.workoutTemplates)
+    ),
+    fetchMirrorCollection<ExerciseLibraryItem>(
+      uid,
+      mirrorCollections.exercises,
+      force ? undefined : pickCollectionCursor(cursors, mirrorCollections.exercises)
+    ),
+    fetchMirrorCollection<WorkoutSession>(
+      uid,
+      mirrorCollections.workoutSessions,
+      force ? undefined : pickCollectionCursor(cursors, mirrorCollections.workoutSessions)
+    ),
+    fetchMirrorCollection<BodyMeasurementEntry>(
+      uid,
+      mirrorCollections.bodyMeasurements,
+      force ? undefined : pickCollectionCursor(cursors, mirrorCollections.bodyMeasurements)
+    ),
+    fetchMirrorCollection<ReminderSettingsMirrorDoc>(
+      uid,
+      mirrorCollections.reminderSettings,
+      force ? undefined : pickCollectionCursor(cursors, mirrorCollections.reminderSettings)
+    ),
+    fetchTombstones(
+      uid,
+      force ? undefined : pickCollectionCursor(cursors, mirrorCollections.syncTombstones)
+    ),
   ]);
   const cloudLogs = logsRes.items;
   const cloudMeals = mealsRes.items;
@@ -327,7 +409,7 @@ export async function reconcileCloudToLocal(
     if (!t?.collectionName || !t?.docId) continue;
     const ts = toMillis(t.deletedAt);
     if (ts == null) continue;
-    const key = `${t.collectionName}::${t.docId}`;
+    const key = `${toCanonicalMirrorCollectionName(String(t.collectionName))}::${t.docId}`;
     const existing = tombstonesByKey.get(key);
     if (existing == null || ts > existing) tombstonesByKey.set(key, ts);
   }
@@ -340,7 +422,7 @@ export async function reconcileCloudToLocal(
   );
 
   const mergedReminderDoc = applyTombstones(
-    "reminders_v1",
+    mirrorCollections.reminderSettings,
     mergedReminderDocsBeforeDelete,
     () => "primary",
     tombstonesByKey,
@@ -360,18 +442,29 @@ export async function reconcileCloudToLocal(
   };
 
   const merged: LocalDataSnapshot = {
-    logs: applyTombstones("logs_v1", mergedBeforeDelete.logs, (x) => String((x as any).date), tombstonesByKey, ["updatedAt"]),
-    meals: applyTombstones("meals_v1", mergedBeforeDelete.meals, (x) => String((x as any).id), tombstonesByKey, ["updatedAt", "createdAt"]),
-    targets: applyTombstones("targets_v1", mergedBeforeDelete.targets, (x) => String((x as any).weekStartDate), tombstonesByKey, ["updatedAt", "createdAt"]),
-    schedules: applyTombstones("schedules_v1", mergedBeforeDelete.schedules, (x) => String((x as any).weekStartDate), tombstonesByKey, []),
-    templates: applyTombstones("templates_v1", mergedBeforeDelete.templates, (x) => String((x as any).id), tombstonesByKey, ["updatedAt", "createdAt"]),
-    exercises: applyTombstones("exercises_v1", mergedBeforeDelete.exercises, (x) => String((x as any).id), tombstonesByKey, ["updatedAt", "createdAt"]),
-    sessions: applyTombstones("sessions_v1", mergedBeforeDelete.sessions, (x) => String((x as any).id), tombstonesByKey, ["endedAt", "startedAt"]),
-    measurements: applyTombstones("measurements_local_v1", mergedBeforeDelete.measurements, measurementKey, tombstonesByKey, ["updatedAt", "createdAt", "loggedAt"]),
+    logs: applyTombstones(mirrorCollections.dailyLogs, mergedBeforeDelete.logs, (x) => String((x as any).date), tombstonesByKey, ["updatedAt"]),
+    meals: applyTombstones(mirrorCollections.nutritionEntries, mergedBeforeDelete.meals, (x) => String((x as any).id), tombstonesByKey, ["updatedAt", "createdAt"]),
+    targets: applyTombstones(mirrorCollections.weeklyTargets, mergedBeforeDelete.targets, (x) => String((x as any).weekStartDate), tombstonesByKey, ["updatedAt", "createdAt"]),
+    schedules: applyTombstones(mirrorCollections.weeklyPlans, mergedBeforeDelete.schedules, (x) => String((x as any).weekStartDate), tombstonesByKey, []),
+    templates: applyTombstones(mirrorCollections.workoutTemplates, mergedBeforeDelete.templates, (x) => String((x as any).id), tombstonesByKey, ["updatedAt", "createdAt"]),
+    exercises: applyTombstones(mirrorCollections.exercises, mergedBeforeDelete.exercises, (x) => String((x as any).id), tombstonesByKey, ["updatedAt", "createdAt"]),
+    sessions: applyTombstones(mirrorCollections.workoutSessions, mergedBeforeDelete.sessions, (x) => String((x as any).id), tombstonesByKey, ["endedAt", "startedAt"]),
+    measurements: applyTombstones(mirrorCollections.bodyMeasurements, mergedBeforeDelete.measurements, measurementKey, tombstonesByKey, ["updatedAt", "createdAt", "loggedAt"]),
     reminders: mergedReminderDoc ? mergeReminderState(mergedBeforeDelete.reminders, mergedReminderDoc) : null,
   };
 
   await localCacheRepo.setSnapshot(uid, merged);
+  const nextCursors: Record<string, string> = {};
+  if (logsRes.cursor) nextCursors[mirrorCollections.dailyLogs] = logsRes.cursor;
+  if (mealsRes.cursor) nextCursors[mirrorCollections.nutritionEntries] = mealsRes.cursor;
+  if (targetsRes.cursor) nextCursors[mirrorCollections.weeklyTargets] = targetsRes.cursor;
+  if (schedulesRes.cursor) nextCursors[mirrorCollections.weeklyPlans] = schedulesRes.cursor;
+  if (templatesRes.cursor) nextCursors[mirrorCollections.workoutTemplates] = templatesRes.cursor;
+  if (exercisesRes.cursor) nextCursors[mirrorCollections.exercises] = exercisesRes.cursor;
+  if (sessionsRes.cursor) nextCursors[mirrorCollections.workoutSessions] = sessionsRes.cursor;
+  if (measurementsRes.cursor) nextCursors[mirrorCollections.bodyMeasurements] = measurementsRes.cursor;
+  if (remindersRes.cursor) nextCursors[mirrorCollections.reminderSettings] = remindersRes.cursor;
+  if (tombstonesRes.cursor) nextCursors[mirrorCollections.syncTombstones] = tombstonesRes.cursor;
 
   await writeCheckpoint(uid, {
     lastFullSyncAt: new Date().toISOString(),
@@ -386,17 +479,6 @@ export async function reconcileCloudToLocal(
       measurements: merged.measurements.length,
       reminders: merged.reminders ? 1 : 0,
     },
-    collectionCursors: {
-      logs_v1: logsRes.cursor,
-      meals_v1: mealsRes.cursor,
-      targets_v1: targetsRes.cursor,
-      schedules_v1: schedulesRes.cursor,
-      templates_v1: templatesRes.cursor,
-      exercises_v1: exercisesRes.cursor,
-      sessions_v1: sessionsRes.cursor,
-      measurements_local_v1: measurementsRes.cursor,
-      reminders_v1: remindersRes.cursor,
-      tombstones_v1: tombstonesRes.cursor,
-    },
+    collectionCursors: nextCursors,
   });
 }

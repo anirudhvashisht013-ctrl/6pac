@@ -45,25 +45,10 @@ function ClassicTabLayout() {
   };
 
   const badgeValue = (name: string) => {
-    const count = tabCounts[name as keyof typeof tabCounts] || 0;
+    const raw = tabCounts?.[name as keyof typeof tabCounts];
+    const count = typeof raw === "number" && Number.isFinite(raw) ? raw : 0;
     if (!count) return undefined;
     return String(Math.min(count, 9));
-  };
-
-  const badgeStyle = (name: string) => {
-    void name;
-    return {
-      backgroundColor: C.error,
-      color: C.bg,
-      fontFamily: "Outfit_700Bold" as const,
-      fontSize: 10,
-      minWidth: 16,
-      height: 16,
-      lineHeight: 16,
-      borderRadius: 99,
-      paddingHorizontal: 4,
-      paddingVertical: 0,
-    };
   };
 
   return (
@@ -95,49 +80,64 @@ function ClassicTabLayout() {
     >
       <Tabs.Screen
         name="index"
-        options={{
+        options={() => {
+          const badge = badgeValue("index");
+          return {
           title: "Today",
           tabBarIcon: makeTabIcon("index"),
-          tabBarBadge: badgeValue("index"),
-          tabBarBadgeStyle: badgeStyle("index"),
+          tabBarBadge: badge,
+          ...(badge ? { tabBarBadgeStyle: styles.tabBadge } : {}),
+        };
         }}
       />
       <Tabs.Screen
         name="week"
-        options={{
+        options={() => {
+          const badge = badgeValue("week");
+          return {
           title: "Weekly Plan",
           tabBarIcon: makeTabIcon("week"),
-          tabBarBadge: badgeValue("week"),
-          tabBarBadgeStyle: badgeStyle("week"),
+          tabBarBadge: badge,
+          ...(badge ? { tabBarBadgeStyle: styles.tabBadge } : {}),
+        };
         }}
       />
       <Tabs.Screen
         name="workouts"
-        options={{
+        options={() => {
+          const badge = badgeValue("workouts");
+          return {
           title: "Workouts",
           tabBarIcon: makeTabIcon("workouts"),
-          tabBarBadge: badgeValue("workouts"),
-          tabBarBadgeStyle: badgeStyle("workouts"),
+          tabBarBadge: badge,
+          ...(badge ? { tabBarBadgeStyle: styles.tabBadge } : {}),
+        };
         }}
       />
       <Tabs.Screen
         name="nutrition"
-        options={{
+        options={() => {
+          const badge = badgeValue("nutrition");
+          return {
           title: "Nutrition",
           tabBarIcon: makeTabIcon("nutrition"),
-          tabBarBadge: badgeValue("nutrition"),
-          tabBarBadgeStyle: badgeStyle("nutrition"),
+          tabBarBadge: badge,
+          ...(badge ? { tabBarBadgeStyle: styles.tabBadge } : {}),
+        };
         }}
       />
 
       {/* New Profile tab */}
       <Tabs.Screen
         name="profile"
-        options={{
+        options={() => {
+          const badge = badgeValue("profile");
+          return {
           title: "Profile",
           tabBarIcon: makeTabIcon("profile"),
-          tabBarBadge: badgeValue("profile"),
-          tabBarBadgeStyle: badgeStyle("profile"),
+          tabBarBadge: badge,
+          ...(badge ? { tabBarBadgeStyle: styles.tabBadge } : {}),
+        };
         }}
       />
     </Tabs>
@@ -152,3 +152,18 @@ export default function TabLayout() {
     </View>
   );
 }
+
+const styles = StyleSheet.create({
+  tabBadge: {
+    backgroundColor: C.error,
+    color: C.bg,
+    fontFamily: "Outfit_700Bold",
+    fontSize: 10,
+    minWidth: 16,
+    height: 16,
+    lineHeight: 16,
+    borderRadius: 99,
+    paddingHorizontal: 4,
+    paddingVertical: 0,
+  },
+});

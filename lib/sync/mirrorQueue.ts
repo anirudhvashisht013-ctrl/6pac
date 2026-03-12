@@ -38,6 +38,7 @@ const BASE_BACKOFF_MS = 5000;
 let initialized = false;
 let processing = false;
 const stateListeners = new Set<() => void>();
+let queueMutation: Promise<void> = Promise.resolve();
 
 let mirrorSyncState: MirrorSyncState = {
   pendingCount: 0,
@@ -58,6 +59,15 @@ function setState(patch: Partial<MirrorSyncState>) {
     updatedAt: Date.now(),
   };
   stateListeners.forEach((l) => l());
+}
+
+function runQueueMutation<T>(fn: () => Promise<T>): Promise<T> {
+  const run = queueMutation.then(fn, fn);
+  queueMutation = run.then(
+    () => undefined,
+    () => undefined
+  );
+  return run;
 }
 
 async function loadQueue(): Promise<QueueItem[]> {
@@ -123,7 +133,7 @@ export function initializeMirrorQueue() {
 
   void loadQueue().then((q) => {
     setState({ pendingCount: q.length });
-    if (getIsOnline() && q.length > 0) void processMirrorQueue();
+    if (q.length > 0) void processMirrorQueue();
   });
 }
 
@@ -133,78 +143,102 @@ export async function enqueueMirrorUpsert(
   docId: string,
   payload: Record<string, unknown>
 ) {
-  const queue = await loadQueue();
-  const k = itemKey({ uid, collectionName, docId });
-  const next: QueueItem = {
-    uid,
-    collectionName,
-    docId,
-    action: "upsert",
-    payload,
-    attempts: 0,
-    nextRetryAt: Date.now(),
-    createdAt: new Date().toISOString(),
-    updatedAt: new Date().toISOString(),
-  };
+  await runQueueMutation(async () => {
+    const queue = await loadQueue();
+    const k = itemKey({ uid, collectionName, docId });
+    const next: QueueItem = {
+      uid,
+      collectionName,
+      docId,
+      action: "upsert",
+      payload,
+      attempts: 0,
+      nextRetryAt: Date.now(),
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    };
 
-  const idx = queue.findIndex((i) => itemKey(i) === k);
-  if (idx >= 0) queue[idx] = { ...queue[idx], ...next };
-  else queue.push(next);
+    const idx = queue.findIndex((i) => itemKey(i) === k);
+    if (idx >= 0) queue[idx] = { ...queue[idx], ...next };
+    else queue.push(next);
 
-  await saveQueue(queue);
-  if (getIsOnline()) void processMirrorQueue();
+    await saveQueue(queue);
+  });
+  void processMirrorQueue();
 }
 
 export async function enqueueMirrorDelete(uid: string, collectionName: string, docId: string) {
-  const queue = await loadQueue();
-  const k = itemKey({ uid, collectionName, docId });
-  const next: QueueItem = {
-    uid,
-    collectionName,
-    docId,
-    action: "delete",
-    attempts: 0,
-    nextRetryAt: Date.now(),
-    createdAt: new Date().toISOString(),
-    updatedAt: new Date().toISOString(),
-  };
+  await runQueueMutation(async () => {
+    const queue = await loadQueue();
+    const k = itemKey({ uid, collectionName, docId });
+    const next: QueueItem = {
+      uid,
+      collectionName,
+      docId,
+      action: "delete",
+      attempts: 0,
+      nextRetryAt: Date.now(),
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    };
 
-  const idx = queue.findIndex((i) => itemKey(i) === k);
-  if (idx >= 0) queue[idx] = { ...queue[idx], ...next };
-  else queue.push(next);
+    const idx = queue.findIndex((i) => itemKey(i) === k);
+    if (idx >= 0) queue[idx] = { ...queue[idx], ...next };
+    else queue.push(next);
 
-  await saveQueue(queue);
-  if (getIsOnline()) void processMirrorQueue();
+    await saveQueue(queue);
+  });
+  void processMirrorQueue();
 }
 
 export async function processMirrorQueue(opts?: { force?: boolean }) {
   if (processing) return;
-  if (!getIsOnline()) return;
-
   const force = !!opts?.force;
+  if (!force && !getIsOnline()) return;
+
   processing = true;
   setState({ syncing: true, lastError: null, runProcessed: 0, runTotal: 0 });
   try {
-    const queue = await loadQueue();
-    if (queue.length === 0) {
-      setState({ syncing: false, pendingCount: 0, runProcessed: 0, runTotal: 0, nextRetryAt: null });
+    const now = Date.now();
+    const dequeue = await runQueueMutation(async () => {
+      const queue = await loadQueue();
+      if (queue.length === 0) {
+        return {
+          due: [] as QueueItem[],
+          wasEmpty: true,
+        };
+      }
+
+      const keep: QueueItem[] = [];
+      const dueItems: QueueItem[] = [];
+      for (const item of queue) {
+        if (force || item.nextRetryAt <= now) dueItems.push(item);
+        else keep.push(item);
+      }
+
+      await saveQueue(keep);
+      return {
+        due: dueItems,
+        wasEmpty: false,
+      };
+    });
+
+    const due = dequeue.due;
+    if (due.length === 0) {
+      if (dequeue.wasEmpty) {
+        setState({ pendingCount: 0, nextRetryAt: null });
+      }
+      setState({ syncing: false, runProcessed: 0, runTotal: 0 });
       return;
     }
 
-    const now = Date.now();
-    const dueCount = queue.filter((q) => force || q.nextRetryAt <= now).length;
-    setState({ runTotal: dueCount, runProcessed: 0 });
+    setState({ runTotal: due.length, runProcessed: 0 });
 
-    const nextQueue: QueueItem[] = [];
+    const retryQueue: QueueItem[] = [];
     let processed = 0;
     let successCount = 0;
 
-    for (const item of queue) {
-      if (!force && item.nextRetryAt > now) {
-        nextQueue.push(item);
-        continue;
-      }
-
+    for (const item of due) {
       try {
         await applyItem(item);
         successCount += 1;
@@ -212,7 +246,7 @@ export async function processMirrorQueue(opts?: { force?: boolean }) {
         setState({ runProcessed: processed });
       } catch (err: any) {
         const attempts = item.attempts + 1;
-        nextQueue.push({
+        retryQueue.push({
           ...item,
           attempts,
           updatedAt: new Date().toISOString(),
@@ -225,8 +259,18 @@ export async function processMirrorQueue(opts?: { force?: boolean }) {
       }
     }
 
-    await saveQueue(nextQueue);
-    if (successCount > 0 && nextQueue.length === 0) {
+    if (retryQueue.length > 0) {
+      await runQueueMutation(async () => {
+        const queue = await loadQueue();
+        const merged = new Map<string, QueueItem>(queue.map((item) => [itemKey(item), item]));
+        for (const item of retryQueue) {
+          merged.set(itemKey(item), item);
+        }
+        await saveQueue(Array.from(merged.values()));
+      });
+    }
+
+    if (successCount > 0 && retryQueue.length === 0) {
       setState({ lastSyncedAt: Date.now() });
     } else if (successCount > 0) {
       setState({ lastSyncedAt: Date.now() });
@@ -238,15 +282,17 @@ export async function processMirrorQueue(opts?: { force?: boolean }) {
 }
 
 export async function syncMirrorNow() {
-  const queue = await loadQueue();
-  if (queue.length === 0) return;
+  await runQueueMutation(async () => {
+    const queue = await loadQueue();
+    if (queue.length === 0) return;
 
-  const patched = queue.map((item) => ({
-    ...item,
-    nextRetryAt: Date.now(),
-    updatedAt: new Date().toISOString(),
-  }));
-  await saveQueue(patched);
+    const patched = queue.map((item) => ({
+      ...item,
+      nextRetryAt: Date.now(),
+      updatedAt: new Date().toISOString(),
+    }));
+    await saveQueue(patched);
+  });
   await processMirrorQueue({ force: true });
 }
 

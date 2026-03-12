@@ -2,7 +2,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import type {
   User, DailyLog, MealEntry, WeeklyTarget,
   WeekSchedule, WorkoutTemplate, WorkoutSession, BodyMeasurementEntry, ExerciseLibraryItem, ReminderState,
-  ReminderSettingsMirrorDoc,
+  ReminderSettingsMirrorDoc, DailySummaryMirrorDoc,
 } from './types';
 import { cloudMirrorRepo } from "@/lib/repos/cloudMirrorRepo";
 import { measurementDocId, normalizeMeasurementEntry } from "@/lib/measurements/identity";
@@ -12,7 +12,8 @@ import {
   getMeasurementRange,
 } from "@/lib/measurements/localMeasurementsQuery";
 import { emitDataEvent } from "@/lib/dataEvents";
-import { todayYMD } from "@/lib/dates";
+import { getMondayYMD, getWeekDates, todayYMD } from "@/lib/dates";
+import type { ISODate } from "@/lib/models";
 
 const KEY = {
   users: '@6pac:users',
@@ -69,6 +70,169 @@ function normalizeSession(session: WorkoutSession): WorkoutSession {
     sessionBlocks: Array.isArray(session.sessionBlocks) ? session.sessionBlocks : undefined,
     missed: !!session.missed,
   };
+}
+
+function parseIsoMs(value: string | null | undefined): number | null {
+  if (!value) return null;
+  const ms = Date.parse(value);
+  return Number.isNaN(ms) ? null : ms;
+}
+
+function maxIso(values: Array<string | null | undefined>): string | null {
+  let bestMs = Number.NaN;
+  let bestIso: string | null = null;
+  for (const value of values) {
+    const ms = parseIsoMs(value);
+    if (ms == null) continue;
+    if (!Number.isFinite(bestMs) || ms > bestMs) {
+      bestMs = ms;
+      bestIso = new Date(ms).toISOString();
+    }
+  }
+  return bestIso;
+}
+
+function sessionDurationMinutes(session: WorkoutSession): number | null {
+  if (!session.endedAt) return null;
+  const startMs = parseIsoMs(session.startedAt);
+  const endMs = parseIsoMs(session.endedAt);
+  if (startMs == null || endMs == null || endMs <= startMs) return null;
+  return Math.round((endMs - startMs) / 60000);
+}
+
+function buildDailySummaryDoc(snapshot: LocalDataSnapshot, date: string): DailySummaryMirrorDoc {
+  const weekStartDate = getMondayYMD(date as ISODate);
+  const log = snapshot.logs.find((x) => x.date === date) || null;
+  const meals = snapshot.meals.filter((x) => x.date === date);
+  const sessions = snapshot.sessions.filter((x) => x.date === date);
+  const target = snapshot.targets.find((x) => x.weekStartDate === weekStartDate) || null;
+  const schedule = snapshot.schedules.find((x) => x.weekStartDate === weekStartDate) || null;
+  const plannedDay = schedule?.days.find((x) => x.date === date) || null;
+
+  let mealCalories = 0;
+  let mealProtein = 0;
+  let mealCarbs = 0;
+  let mealFat = 0;
+  let hasCalories = false;
+  let hasProtein = false;
+  let hasCarbs = false;
+  let hasFat = false;
+
+  for (const meal of meals) {
+    if (meal.calories != null) {
+      hasCalories = true;
+      mealCalories += meal.calories;
+    }
+    if (meal.proteinG != null) {
+      hasProtein = true;
+      mealProtein += meal.proteinG;
+    }
+    if (meal.carbsG != null) {
+      hasCarbs = true;
+      mealCarbs += meal.carbsG;
+    }
+    if (meal.fatG != null) {
+      hasFat = true;
+      mealFat += meal.fatG;
+    }
+  }
+
+  const manualCalories = log?.caloriesManual ?? null;
+  const totalCalories =
+    hasCalories || manualCalories != null ? mealCalories + (manualCalories || 0) : null;
+
+  const completedSessions = sessions.filter((x) => x.completed);
+  const missedSessions = sessions.filter((x) => !!x.missed);
+  let totalWorkoutMinutes = 0;
+  let hasWorkoutDuration = false;
+  for (const session of completedSessions) {
+    const minutes = sessionDurationMinutes(session);
+    if (minutes == null) continue;
+    hasWorkoutDuration = true;
+    totalWorkoutMinutes += minutes;
+  }
+  const workoutMinutes =
+    completedSessions.length > 0 ? (hasWorkoutDuration ? totalWorkoutMinutes : null) : null;
+
+  const caloriesOnTarget =
+    target && totalCalories != null
+      ? totalCalories >= target.dailyCaloriesTarget * 0.95 &&
+        totalCalories <= target.dailyCaloriesTarget * 1.05
+      : null;
+  const stepsOnTarget =
+    target && log?.steps != null ? log.steps >= target.dailyStepsTarget : null;
+  const waterOnTarget =
+    target && log?.waterMl != null ? log.waterMl >= target.dailyWaterMlTarget : null;
+  const plannedWorkoutCompleted =
+    plannedDay?.status === "planned_workout" ? completedSessions.length > 0 : null;
+
+  return {
+    id: date,
+    date,
+    version: 1,
+    log: {
+      weightKg: log?.weightKg ?? null,
+      sleepHours: log?.sleepHours ?? null,
+      steps: log?.steps ?? null,
+      waterMl: log?.waterMl ?? null,
+      supplementsTaken: log?.supplementsTaken ?? null,
+      caloriesManual: log?.caloriesManual ?? null,
+      updatedAt: log?.updatedAt ?? null,
+    },
+    nutrition: {
+      mealCount: meals.length,
+      calories: totalCalories,
+      proteinG: hasProtein ? mealProtein : null,
+      carbsG: hasCarbs ? mealCarbs : null,
+      fatG: hasFat ? mealFat : null,
+      lastMealUpdateAt: maxIso(meals.map((x) => x.updatedAt || x.createdAt || null)),
+    },
+    workouts: {
+      totalSessions: sessions.length,
+      completedSessions: completedSessions.length,
+      missedSessions: missedSessions.length,
+      workoutMinutes,
+      sessionIds: sessions.map((x) => x.id),
+      lastSessionUpdateAt: maxIso(
+        sessions.map((x) => x.endedAt || x.startedAt || null)
+      ),
+    },
+    weekly: {
+      weekStartDate,
+      target: {
+        dailyCaloriesTarget: target?.dailyCaloriesTarget ?? null,
+        dailyStepsTarget: target?.dailyStepsTarget ?? null,
+        dailyWaterMlTarget: target?.dailyWaterMlTarget ?? null,
+        targetWeightKg: target?.targetWeightKg ?? null,
+        weightGoalType: target?.weightGoalType ?? null,
+        updatedAt: target?.updatedAt ?? null,
+      },
+      plan: {
+        status: plannedDay?.status ?? null,
+        workoutTemplateId: plannedDay?.workoutTemplateId ?? null,
+      },
+    },
+    tallies: {
+      caloriesOnTarget,
+      stepsOnTarget,
+      waterOnTarget,
+      plannedWorkoutCompleted,
+    },
+    updatedAt: new Date().toISOString(),
+  };
+}
+
+async function syncDailySummary(uid: string, date: string, snapshot?: LocalDataSnapshot): Promise<void> {
+  const source = snapshot || (await localCacheRepo.getSnapshot(uid));
+  const summary = buildDailySummaryDoc(source, date);
+  await cloudMirrorRepo.upsertDailySummary(uid, summary);
+}
+
+async function syncWeekDailySummaries(uid: string, weekStartDate: string): Promise<void> {
+  const source = await localCacheRepo.getSnapshot(uid);
+  for (const date of getWeekDates(weekStartDate as ISODate)) {
+    await syncDailySummary(uid, date, source);
+  }
 }
 
 export type LocalDataSnapshot = {
@@ -184,6 +348,7 @@ export const logsRepo = {
     await set(KEY.logs(uid), all);
     emitDataEvent(uid, "logs");
     mirrorBestEffort(cloudMirrorRepo.upsertLog(uid, log), `logs/${log.date}`);
+    mirrorBestEffort(syncDailySummary(uid, log.date), `daily_summaries/${log.date}:log`);
   },
 };
 
@@ -203,6 +368,10 @@ export const targetsRepo = {
     await set(KEY.targets(uid), all);
     emitDataEvent(uid, "targets");
     mirrorBestEffort(cloudMirrorRepo.upsertTarget(uid, target), `targets/${target.weekStartDate}`);
+    mirrorBestEffort(
+      syncWeekDailySummaries(uid, target.weekStartDate),
+      `daily_summaries/${target.weekStartDate}:targets`
+    );
   },
 };
 
@@ -222,6 +391,10 @@ export const schedulesRepo = {
     await set(KEY.schedules(uid), all);
     emitDataEvent(uid, "schedules");
     mirrorBestEffort(cloudMirrorRepo.upsertSchedule(uid, schedule), `schedules/${schedule.weekStartDate}`);
+    mirrorBestEffort(
+      syncWeekDailySummaries(uid, schedule.weekStartDate),
+      `daily_summaries/${schedule.weekStartDate}:plans`
+    );
   },
 };
 
@@ -310,12 +483,17 @@ export const mealsRepo = {
     await set(KEY.meals(uid), all);
     emitDataEvent(uid, "meals");
     mirrorBestEffort(cloudMirrorRepo.upsertMeal(uid, meal), `meals/${meal.id}`);
+    mirrorBestEffort(syncDailySummary(uid, meal.date), `daily_summaries/${meal.date}:meal`);
   },
   async delete(uid: string, id: string): Promise<void> {
     const all = await this.getAll(uid);
+    const removed = all.find((meal) => meal.id === id) || null;
     await set(KEY.meals(uid), all.filter(m => m.id !== id));
     emitDataEvent(uid, "meals");
     mirrorBestEffort(cloudMirrorRepo.deleteMeal(uid, id), `meals/${id}:delete`);
+    if (removed) {
+      mirrorBestEffort(syncDailySummary(uid, removed.date), `daily_summaries/${removed.date}:meal-delete`);
+    }
   },
 };
 
@@ -345,6 +523,7 @@ export const sessionsRepo = {
       emitDataEvent(uid, "sessions");
       updatedForMissed.forEach((session) => {
         mirrorBestEffort(cloudMirrorRepo.upsertSession(uid, session), `sessions/${session.id}`);
+        mirrorBestEffort(syncDailySummary(uid, session.date), `daily_summaries/${session.date}:missed`);
       });
     }
 
@@ -366,15 +545,9 @@ export const sessionsRepo = {
     else all.push(normalizedSession);
     await set(KEY.sessions(uid), all);
     emitDataEvent(uid, "sessions");
-
-    const shouldMirror =
-      !!opts?.syncToCloud ||
-      normalizedSession.completed ||
-      !!normalizedSession.missed;
-
-    if (shouldMirror) {
-      mirrorBestEffort(cloudMirrorRepo.upsertSession(uid, normalizedSession), `sessions/${normalizedSession.id}`);
-    }
+    void opts;
+    mirrorBestEffort(cloudMirrorRepo.upsertSession(uid, normalizedSession), `sessions/${normalizedSession.id}`);
+    mirrorBestEffort(syncDailySummary(uid, normalizedSession.date), `daily_summaries/${normalizedSession.date}:session`);
   },
 };
 

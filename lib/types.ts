@@ -216,3 +216,56 @@ export type ReminderSettingsMirrorDoc = {
   createdAt: string;
   updatedAt: string;
 };
+
+export type DailySummaryMirrorDoc = {
+  id: string;
+  date: string;
+  version: 1;
+  log: {
+    weightKg: number | null;
+    sleepHours: number | null;
+    steps: number | null;
+    waterMl: number | null;
+    supplementsTaken: boolean | null;
+    caloriesManual: number | null;
+    updatedAt: string | null;
+  };
+  nutrition: {
+    mealCount: number;
+    calories: number | null;
+    proteinG: number | null;
+    carbsG: number | null;
+    fatG: number | null;
+    lastMealUpdateAt: string | null;
+  };
+  workouts: {
+    totalSessions: number;
+    completedSessions: number;
+    missedSessions: number;
+    workoutMinutes: number | null;
+    sessionIds: string[];
+    lastSessionUpdateAt: string | null;
+  };
+  weekly: {
+    weekStartDate: string;
+    target: {
+      dailyCaloriesTarget: number | null;
+      dailyStepsTarget: number | null;
+      dailyWaterMlTarget: number | null;
+      targetWeightKg: number | null;
+      weightGoalType: "lose" | "gain" | "maintain" | null;
+      updatedAt: string | null;
+    };
+    plan: {
+      status: DayStatus | null;
+      workoutTemplateId: string | null;
+    };
+  };
+  tallies: {
+    caloriesOnTarget: boolean | null;
+    stepsOnTarget: boolean | null;
+    waterOnTarget: boolean | null;
+    plannedWorkoutCompleted: boolean | null;
+  };
+  updatedAt: string;
+};

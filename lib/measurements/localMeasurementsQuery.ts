@@ -1,10 +1,17 @@
 import type { BodyMeasurementEntry } from "@/lib/types";
+import {
+  compareMeasurementDates,
+  isMeasurementForDate,
+  normalizeMeasurementEntries,
+} from "@/lib/adapters/measurementKeyAdapter";
 
 export function getMeasurementByDate(
   measurements: BodyMeasurementEntry[],
   date: string
 ): BodyMeasurementEntry | null {
-  return measurements.find((entry) => entry.date === date) || null;
+  return normalizeMeasurementEntries(measurements, "local-query:getByDate").find((entry) =>
+    isMeasurementForDate(entry, date)
+  ) || null;
 }
 
 export function getMeasurementRange(
@@ -12,7 +19,7 @@ export function getMeasurementRange(
   start: string,
   end: string
 ): BodyMeasurementEntry[] {
-  return measurements
+  return normalizeMeasurementEntries(measurements, "local-query:getRange")
     .filter((entry) => entry.date >= start && entry.date <= end)
-    .sort((a, b) => a.date.localeCompare(b.date));
+    .sort(compareMeasurementDates);
 }

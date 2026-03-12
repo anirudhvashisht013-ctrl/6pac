@@ -38,6 +38,17 @@ test("measurement date lookup returns matching local measurement or null", () =>
   assert.equal(missing, null);
 });
 
+test("measurement date lookup resolves legacy id fallback to canonical date", () => {
+  const measurements = [
+    makeMeasurement("legacy-key", { id: "2026-03-02" }),
+  ];
+
+  const found = getMeasurementByDate(measurements, "2026-03-02");
+
+  assert.equal(found?.date, "2026-03-02");
+  assert.equal(found?.id, "2026-03-02");
+});
+
 test("measurement range filters inclusively and sorts by date", () => {
   const measurements = [
     makeMeasurement("2026-03-04"),
@@ -48,4 +59,17 @@ test("measurement range filters inclusively and sorts by date", () => {
 
   const range = getMeasurementRange(measurements, "2026-03-01", "2026-03-03");
   assert.deepEqual(range.map((entry) => entry.date), ["2026-03-01", "2026-03-03"]);
+});
+
+test("measurement range de-duplicates conflicting rows by logical key", () => {
+  const measurements = [
+    makeMeasurement("2026-03-01", { notes: "old" }),
+    makeMeasurement("legacy-key", { id: "2026-03-01", notes: "latest" }),
+  ];
+
+  const range = getMeasurementRange(measurements, "2026-03-01", "2026-03-01");
+
+  assert.equal(range.length, 1);
+  assert.equal(range[0]?.date, "2026-03-01");
+  assert.equal(range[0]?.notes, "latest");
 });

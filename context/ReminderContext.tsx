@@ -30,9 +30,15 @@ import {
 } from "@/lib/reminders/engine";
 import {
   buildDefaultReminderState,
-  mergeReminderStateDefaults,
 } from "@/lib/reminders/defaults";
 import type { ReminderSettings, ReminderState } from "@/lib/types";
+import {
+  getReminderRuntimeBoundary,
+  getReminderSettingsBoundary,
+  normalizeReminderStateRecord,
+  withReminderRuntimeBoundary,
+  withReminderSettingsBoundary,
+} from "@/lib/adapters/reminderStateAdapter";
 
 type TabCounts = Partial<Record<ReminderTab, number>>;
 type ReminderSettingsPatch = {
@@ -104,11 +110,12 @@ function shallowEqualJson(a: unknown, b: unknown): boolean {
 
 function comparableState(state: ReminderState | null): unknown {
   if (!state) return null;
+  const runtime = getReminderRuntimeBoundary(state, "context:comparable");
   return {
     ...state,
     updatedAt: "__ignore__",
     runtime: {
-      ...state.runtime,
+      ...runtime,
       updatedAt: "__ignore__",
     },
   };
@@ -183,15 +190,17 @@ export function ReminderProvider({ children }: { children: ReactNode }) {
       getNotificationPermissionStatus(),
     ]);
 
-    const merged = mergeReminderStateDefaults(rawState);
+    const merged = normalizeReminderStateRecord(rawState, "context:refresh");
+    const mergedSettings = getReminderSettingsBoundary(merged, "context:refresh:settings");
+    const mergedRuntime = getReminderRuntimeBoundary(merged, "context:refresh:runtime");
 
     const timezone = Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
     const plan = computeReminderPlan({
       now: new Date(),
       timezone,
-      settings: merged.settings,
+      settings: mergedSettings,
       runtime: {
-        ...merged.runtime,
+        ...mergedRuntime,
         permissionStatus: permission,
       },
       canSendOsNotifications: permission === "granted",
@@ -203,35 +212,29 @@ export function ReminderProvider({ children }: { children: ReactNode }) {
       measurements,
     });
 
-    const candidateState: ReminderState = {
-      ...merged,
-      runtime: {
-        ...merged.runtime,
-        permissionStatus: permission,
-        ...plan.runtimePatch,
-      },
-    };
+    const candidateState = withReminderRuntimeBoundary(merged, {
+      ...mergedRuntime,
+      permissionStatus: permission,
+      ...plan.runtimePatch,
+    });
 
     const hasMaterialChange = !shallowEqualJson(
-      comparableState(rawState ? mergeReminderStateDefaults(rawState) : null),
+      comparableState(rawState ? normalizeReminderStateRecord(rawState, "context:refresh:raw") : null),
       comparableState(candidateState)
     );
 
     const nextState: ReminderState = hasMaterialChange
-      ? {
-          ...candidateState,
-          runtime: {
-            ...candidateState.runtime,
-            updatedAt: new Date().toISOString(),
-          },
-        }
+      ? withReminderRuntimeBoundary(candidateState, {
+          ...getReminderRuntimeBoundary(candidateState, "context:refresh:next-runtime"),
+          updatedAt: new Date().toISOString(),
+        })
       : merged;
 
     if (hasMaterialChange) {
       await remindersRepo.saveLocal(uid, nextState);
     }
 
-    if (permission === "granted" && merged.settings.enabled) {
+    if (permission === "granted" && mergedSettings.enabled) {
       await syncReminderNotificationSchedule(plan.notifications);
     } else {
       await syncReminderNotificationSchedule([]);
@@ -305,7 +308,7 @@ export function ReminderProvider({ children }: { children: ReactNode }) {
     ) => {
       const uid = user?.id;
       if (!uid) return;
-      const next = updater(stateRef.current);
+      const next = normalizeReminderStateRecord(updater(stateRef.current), "context:persist");
       setState(next);
       stateRef.current = next;
       await remindersRepo.saveLocal(uid, next);
@@ -320,11 +323,14 @@ export function ReminderProvider({ children }: { children: ReactNode }) {
   const updateSettings = useCallback(
     async (patch: ReminderSettingsPatch) => {
       await persistState(
-        (prev) => ({
-          ...prev,
-          settings: mergeSettings(prev.settings, patch),
-          updatedAt: new Date().toISOString(),
-        }),
+        (prev) =>
+          ({
+            ...withReminderSettingsBoundary(
+              prev,
+              mergeSettings(getReminderSettingsBoundary(prev, "context:updateSettings"), patch)
+            ),
+            updatedAt: new Date().toISOString(),
+          }),
         { syncSettings: true }
       );
     },
@@ -335,15 +341,14 @@ export function ReminderProvider({ children }: { children: ReactNode }) {
     const status = await requestNotificationPermission();
     setPermissionStatus(status);
 
-    await persistState((prev) => ({
-      ...prev,
-      runtime: {
-        ...prev.runtime,
+    await persistState((prev) =>
+      withReminderRuntimeBoundary(prev, {
+        ...getReminderRuntimeBoundary(prev, "context:requestOsPermission"),
         permissionStatus: status,
         lastPermissionPromptAt: new Date().toISOString(),
         updatedAt: new Date().toISOString(),
-      },
-    }));
+      })
+    );
 
     return status;
   }, [persistState]);
@@ -354,17 +359,17 @@ export function ReminderProvider({ children }: { children: ReactNode }) {
 
   const snoozeItem = useCallback(
     async (item: PendingReminderItem, choice: SnoozeChoice) => {
-      await persistState((prev) => ({
-        ...prev,
-        runtime: {
-          ...prev.runtime,
+      await persistState((prev) => {
+        const runtime = getReminderRuntimeBoundary(prev, "context:snooze");
+        return withReminderRuntimeBoundary(prev, {
+          ...runtime,
           snoozedUntil: {
-            ...(prev.runtime.snoozedUntil || {}),
+            ...(runtime.snoozedUntil || {}),
             [item.id]: resolveSnooze(choice, new Date()),
           },
           updatedAt: new Date().toISOString(),
-        },
-      }));
+        });
+      });
     },
     [persistState]
   );
@@ -373,17 +378,17 @@ export function ReminderProvider({ children }: { children: ReactNode }) {
     async (item: PendingReminderItem) => {
       if (!item.allowDismiss) return;
 
-      await persistState((prev) => ({
-        ...prev,
-        runtime: {
-          ...prev.runtime,
+      await persistState((prev) => {
+        const runtime = getReminderRuntimeBoundary(prev, "context:dismiss");
+        return withReminderRuntimeBoundary(prev, {
+          ...runtime,
           dismissedCycles: {
-            ...(prev.runtime.dismissedCycles || {}),
+            ...(runtime.dismissedCycles || {}),
             [item.cycleKey]: dismissUntilForItem(item, new Date()),
           },
           updatedAt: new Date().toISOString(),
-        },
-      }));
+        });
+      });
     },
     [persistState]
   );

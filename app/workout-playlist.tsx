@@ -18,6 +18,10 @@ import { C } from '@/constants/colors';
 import { useAuth } from '@/context/AuthContext';
 import { useFeedbackToast } from '@/context/FeedbackToastContext';
 import { exercisesRepo, sessionsRepo, workoutsRepo } from '@/lib/storage';
+import {
+  getWorkoutSessionDisplayName,
+  getWorkoutSessionSnapshotBoundary,
+} from '@/lib/adapters/workoutSessionSnapshotAdapter';
 import { upsertExercise, type ExerciseDraft } from '@/lib/exercises/libraryService';
 import ExercisePickerModal from '@/components/ExercisePickerModal';
 import ExerciseFormModal from '@/components/ExerciseFormModal';
@@ -56,6 +60,30 @@ export default function WorkoutPlaylistScreen() {
   const [exerciseCreateInitial, setExerciseCreateInitial] = useState<ExerciseDraft | undefined>(undefined);
   const [editingSetsBlockId, setEditingSetsBlockId] = useState<string | null>(null);
 
+  const sessionSnapshot = useMemo(
+    () =>
+      session
+        ? getWorkoutSessionSnapshotBoundary(session, {
+            workoutTemplateId: template?.id ?? session.workoutTemplateId ?? null,
+            workoutName: template?.name ?? null,
+            blocks: template?.blocks ?? null,
+          })
+        : null,
+    [session, template]
+  );
+
+  const sessionDisplayName = useMemo(
+    () =>
+      session
+        ? getWorkoutSessionDisplayName(session, {
+            workoutTemplateId: template?.id ?? session.workoutTemplateId ?? null,
+            workoutName: template?.name ?? null,
+            blocks: template?.blocks ?? null,
+          })
+        : "Workout",
+    [session, template]
+  );
+
   useEffect(() => {
     (async () => {
       if (!user || !sessionId) {
@@ -75,14 +103,20 @@ export default function WorkoutPlaylistScreen() {
         return;
       }
 
-      const loadedTemplate = await workoutsRepo.getById(user.id, loadedSession.workoutTemplateId);
+      const loadedTemplate = loadedSession.workoutTemplateId
+        ? await workoutsRepo.getById(user.id, loadedSession.workoutTemplateId)
+        : null;
       if (!loadedTemplate) {
         setLoading(false);
         router.back();
         return;
       }
 
-      const sessionBlocks = loadedSession.sessionBlocks || loadedTemplate.blocks;
+      const sessionSnapshotBoundary = getWorkoutSessionSnapshotBoundary(loadedSession, {
+        workoutTemplateId: loadedTemplate.id,
+        workoutName: loadedTemplate.name,
+        blocks: loadedTemplate.blocks,
+      });
 
       const parsedIdx = Number.parseInt(currentBlockIdx || '', 10);
       const firstIncomplete = loadedSession.blockPerformances.findIndex((item) => !item.completed);
@@ -98,7 +132,7 @@ export default function WorkoutPlaylistScreen() {
       setSession(loadedSession);
       setTemplate(loadedTemplate);
       setDraftPerformances(loadedSession.blockPerformances);
-      setDraftSessionBlocks(sessionBlocks);
+      setDraftSessionBlocks(sessionSnapshotBoundary.sessionBlocks || []);
       setActiveBlockIdx(resolvedIdx);
       setExerciseLibrary(sortedExercises);
       setExerciseById(new Map(sortedExercises.map((exercise) => [exercise.id, exercise])));
@@ -412,7 +446,7 @@ export default function WorkoutPlaylistScreen() {
         </Pressable>
         <View style={styles.headerCenter}>
           <Text style={styles.headerTitle}>Workout Playlist</Text>
-          <Text style={styles.headerSubtitle}>{session.workoutNameSnapshot}</Text>
+          <Text style={styles.headerSubtitle}>{sessionDisplayName}</Text>
         </View>
         <Pressable
           style={({ pressed }) => [

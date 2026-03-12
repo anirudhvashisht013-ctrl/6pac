@@ -22,6 +22,10 @@ import { useAuth } from '@/context/AuthContext';
 import { MAX_REFERENCE_VIDEO_URLS } from '@/lib/exercises/constants';
 import { todayYMD } from '@/lib/dates';
 import { exercisesRepo, sessionsRepo, workoutsRepo } from '@/lib/storage';
+import {
+  getWorkoutSessionDisplayName,
+  getWorkoutSessionSnapshotBoundary,
+} from '@/lib/adapters/workoutSessionSnapshotAdapter';
 import { confirm } from '@/lib/ui/confirm';
 import type { ExerciseLibraryItem, WorkoutSession, WorkoutTemplate, GymSet } from '@/lib/types';
 import {
@@ -90,7 +94,9 @@ export default function PlayerScreen() {
     setFinished(!!s.completed);
     setSession(s);
 
-    const t = await workoutsRepo.getById(user.id, s.workoutTemplateId);
+    const t = s.workoutTemplateId
+      ? await workoutsRepo.getById(user.id, s.workoutTemplateId)
+      : null;
     setTemplate(t);
 
     const exercises = await exercisesRepo.getAll(user.id);
@@ -116,9 +122,33 @@ export default function PlayerScreen() {
     return updated;
   }, [user, session]);
 
+  const sessionSnapshot = useMemo(
+    () =>
+      session
+        ? getWorkoutSessionSnapshotBoundary(session, {
+            workoutTemplateId: template?.id ?? session.workoutTemplateId ?? null,
+            workoutName: template?.name ?? null,
+            blocks: template?.blocks ?? null,
+          })
+        : null,
+    [session, template]
+  );
+
+  const sessionDisplayName = useMemo(
+    () =>
+      session
+        ? getWorkoutSessionDisplayName(session, {
+            workoutTemplateId: template?.id ?? session.workoutTemplateId ?? null,
+            workoutName: template?.name ?? null,
+            blocks: template?.blocks ?? null,
+          })
+        : "Workout",
+    [session, template]
+  );
+
   const effectiveSessionBlocks = useMemo(
-    () => session?.sessionBlocks || template?.blocks || [],
-    [session?.sessionBlocks, template?.blocks]
+    () => sessionSnapshot?.sessionBlocks || [],
+    [sessionSnapshot]
   );
 
   const blocksById = useMemo(
@@ -127,11 +157,11 @@ export default function PlayerScreen() {
   );
 
   const orderedBlocks = useMemo(() => {
-    if (!session || !template) return [];
-    return session.blockPerformances
+    if (!sessionSnapshot) return [];
+    return sessionSnapshot.blockPerformances
       .map((performance) => blocksById.get(performance.blockId))
       .filter((item): item is WorkoutTemplate['blocks'][number] => !!item);
-  }, [session, blocksById]);
+  }, [sessionSnapshot, blocksById]);
 
   useEffect(() => {
     if (orderedBlocks.length === 0) return;
@@ -448,7 +478,7 @@ export default function PlayerScreen() {
           <Ionicons name="trophy" size={48} color={C.warning} />
         </View>
         <Text style={styles.finishedTitle}>Workout Complete!</Text>
-        <Text style={styles.finishedSubtitle}>{session?.workoutNameSnapshot}</Text>
+        <Text style={styles.finishedSubtitle}>{sessionDisplayName}</Text>
 
         {session?.startedAt && session?.endedAt && (
           <Text style={styles.finishedDuration}>

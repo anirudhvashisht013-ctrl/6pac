@@ -6,13 +6,18 @@ import {
   type LocalDataSnapshot,
 } from "@/lib/storage";
 import { measurementDocId, normalizeMeasurementEntry } from "@/lib/measurements/identity";
-import { mergeReminderStateDefaults } from "@/lib/reminders/defaults";
+import { normalizeMeasurementEntries } from "@/lib/adapters/measurementKeyAdapter";
 import {
   getMirrorReadCollections,
   mirrorCollections,
   toCanonicalMirrorCollectionName,
   type MirrorCollectionName,
 } from "@/lib/sync/mirrorSchema";
+import {
+  normalizeReminderStateRecord,
+  toReminderSettingsMirrorBoundary,
+  withReminderSettingsBoundary,
+} from "@/lib/adapters/reminderStateAdapter";
 import type {
   BodyMeasurementEntry,
   DailyLog,
@@ -273,45 +278,40 @@ function measurementKey(entry: BodyMeasurementEntry): string {
   return key;
 }
 
-function toReminderSettingsDoc(state: ReminderState): ReminderSettingsMirrorDoc {
-  return {
-    id: "primary",
-    version: 1,
-    settings: state.settings,
-    createdAt: state.createdAt,
-    updatedAt: state.updatedAt,
-  };
-}
-
 function mergeReminderState(
   localState: ReminderState | null,
   reminderDoc: ReminderSettingsMirrorDoc | null
 ): ReminderState | null {
-  const normalizedLocal = localState ? mergeReminderStateDefaults(localState) : null;
+  const normalizedLocal = localState
+    ? normalizeReminderStateRecord(localState, "reconcile:local-reminders")
+    : null;
   if (!normalizedLocal && !reminderDoc) return null;
   if (!reminderDoc) return normalizedLocal;
 
   const nowIso = new Date().toISOString();
   const base = normalizedLocal
     ? normalizedLocal
-    : mergeReminderStateDefaults({
+    : normalizeReminderStateRecord(
+        {
         id: "primary",
         version: 1,
         settings: reminderDoc.settings,
         runtime: {},
         createdAt: reminderDoc.createdAt || nowIso,
         updatedAt: reminderDoc.updatedAt || nowIso,
-      });
+        },
+        "reconcile:cloud-reminder-base"
+      );
 
-  return mergeReminderStateDefaults({
-    ...base,
-    id: "primary",
-    version: 1,
-    settings: reminderDoc.settings,
-    createdAt: base.createdAt || reminderDoc.createdAt || nowIso,
-    // Keep settings-level timestamp from cloud/local doc; runtime timestamp stays nested.
-    updatedAt: reminderDoc.updatedAt || base.updatedAt,
-  });
+  return normalizeReminderStateRecord(
+    {
+      ...withReminderSettingsBoundary(base, reminderDoc.settings),
+      createdAt: base.createdAt || reminderDoc.createdAt || nowIso,
+      // Keep settings-level timestamp from cloud/local doc; runtime timestamp stays nested.
+      updatedAt: reminderDoc.updatedAt || base.updatedAt,
+    },
+    "reconcile:merged-reminders"
+  );
 }
 
 export async function reconcileCloudToLocal(
@@ -394,13 +394,15 @@ export async function reconcileCloudToLocal(
   const cloudTemplates = templatesRes.items;
   const cloudExercises = exercisesRes.items;
   const cloudSessions = sessionsRes.items;
-  const cloudMeasurements = measurementsRes.items
-    .map(normalizeMeasurementEntry)
-    .filter(hasMeasurementKey);
-  const localMeasurements = local.measurements
-    .map(normalizeMeasurementEntry)
-    .filter(hasMeasurementKey);
-  const localReminderDocs = local.reminders ? [toReminderSettingsDoc(local.reminders)] : [];
+  const cloudMeasurements = normalizeMeasurementEntries(
+    measurementsRes.items.map(normalizeMeasurementEntry).filter(hasMeasurementKey),
+    "reconcile:cloudMeasurements"
+  );
+  const localMeasurements = normalizeMeasurementEntries(
+    local.measurements.map(normalizeMeasurementEntry).filter(hasMeasurementKey),
+    "reconcile:localMeasurements"
+  );
+  const localReminderDocs = local.reminders ? [toReminderSettingsMirrorBoundary(local.reminders)] : [];
   const cloudReminders = remindersRes.items;
   const tombstones = tombstonesRes.items;
 

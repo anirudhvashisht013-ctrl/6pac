@@ -1,9 +1,9 @@
 import type { ISODate } from "@/lib/models";
 import type { BodyMeasurementEntry } from "@/lib/types";
+import { normalizeMeasurementDateParam } from "@/lib/adapters/measurementKeyAdapter";
 
 const CM_PER_IN = 2.54;
 const IN_PER_CM = 0.3937007874;
-const ISO_DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 
 export const MEASUREMENT_FORM_KEYS = [
   "waist",
@@ -82,10 +82,7 @@ export function hydrateMeasurementForm(entry: BodyMeasurementEntry | null): {
 }
 
 export function resolveMeasurementDate(raw: string | undefined, fallbackDate: string): ISODate {
-  if (raw && ISO_DATE_RE.test(raw.trim())) {
-    return raw.trim() as ISODate;
-  }
-  return fallbackDate as ISODate;
+  return normalizeMeasurementDateParam(raw, fallbackDate as ISODate);
 }
 
 export function buildMeasurementEntryFromForm(input: {

@@ -27,7 +27,8 @@ export default ({ config }: ConfigContext): ExpoConfig => {
       bundleIdentifier: "com.sixpac.app",
     },
     android: {
-      package: "com.sixpac.app",
+      package: "com.orgie69.pac6",
+      googleServicesFile: "./google-services.json",
       adaptiveIcon: {
         backgroundColor: "#0A0A0F",
         foregroundImage: "./assets/images/android-icon-foreground.png",

@@ -4,8 +4,55 @@ function readEnv(name: string): string {
   return (process.env[name] || "").trim();
 }
 
+type GoogleServicesClient = {
+  client_info?: {
+    android_client_info?: {
+      package_name?: string;
+    };
+  };
+  oauth_client?: Array<{
+    client_id?: string;
+    client_type?: number;
+    android_info?: {
+      package_name?: string;
+    };
+  }>;
+};
+
+type GoogleServicesConfig = {
+  client?: GoogleServicesClient[];
+};
+
+function loadGoogleAuthExtra(androidPackage: string) {
+  try {
+    const googleServices = require("./google-services.json") as GoogleServicesConfig;
+    const clients = Array.isArray(googleServices.client) ? googleServices.client : [];
+    const matchingClient = clients.find(
+      (client) => client.client_info?.android_client_info?.package_name === androidPackage
+    );
+    const oauthClients = Array.isArray(matchingClient?.oauth_client) ? matchingClient.oauth_client : [];
+    const androidClientId =
+      oauthClients.find(
+        (client) => client.client_type === 1 && client.android_info?.package_name === androidPackage
+      )?.client_id || "";
+    const webClientId = oauthClients.find((client) => client.client_type === 3)?.client_id || "";
+
+    return {
+      androidClientId,
+      webClientId,
+    };
+  } catch {
+    return {
+      androidClientId: "",
+      webClientId: "",
+    };
+  }
+}
+
 export default ({ config }: ConfigContext): ExpoConfig => {
   const appEnv = readEnv("APP_ENV") || readEnv("EAS_BUILD_PROFILE") || readEnv("NODE_ENV") || "development";
+  const androidPackage = "com.orgie69.pac6";
+  const googleAuth = loadGoogleAuthExtra(androidPackage);
 
   return {
     ...config,
@@ -27,7 +74,7 @@ export default ({ config }: ConfigContext): ExpoConfig => {
       bundleIdentifier: "com.sixpac.app",
     },
     android: {
-      package: "com.orgie69.pac6",
+      package: androidPackage,
       googleServicesFile: "./google-services.json",
       adaptiveIcon: {
         backgroundColor: "#0A0A0F",
@@ -68,6 +115,7 @@ export default ({ config }: ConfigContext): ExpoConfig => {
         appId: readEnv("EXPO_PUBLIC_FIREBASE_APP_ID"),
         measurementId: readEnv("EXPO_PUBLIC_FIREBASE_MEASUREMENT_ID") || undefined,
       },
+      googleAuth,
     },
   };
 };

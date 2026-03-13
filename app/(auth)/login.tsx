@@ -10,22 +10,26 @@ import {
   ScrollView,
   ActivityIndicator,
 } from 'react-native';
+import * as Google from 'expo-auth-session/providers/google';
 import { router } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { C } from '@/constants/colors';
 import { useAuth } from '@/context/AuthContext';
+import { getGoogleAuthRequestConfig, isGoogleAuthAvailable } from '@/lib/auth/googleAuth';
 import { ensureUserProfile } from '@/lib/userProfile';
 
 export default function LoginScreen() {
   const insets = useSafeAreaInsets();
-  const { login } = useAuth();
+  const { login, continueWithGoogle } = useAuth();
 
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
+  const googleEnabled = isGoogleAuthAvailable();
+  const [googleRequest, , promptGoogleAuth] = Google.useIdTokenAuthRequest(getGoogleAuthRequestConfig());
 
   const mapFirebaseError = (code: string) => {
     switch (code) {
@@ -71,6 +75,46 @@ export default function LoginScreen() {
 
     } catch (e: any) {
       setError(mapFirebaseError(e?.code));
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleGoogleAuth = async () => {
+    if (!googleEnabled || !googleRequest) {
+      setError('Google sign in is not available in this app build');
+      return;
+    }
+
+    setLoading(true);
+    setError('');
+
+    try {
+      const result = await promptGoogleAuth();
+
+      if (result.type !== 'success') {
+        if (result.type !== 'dismiss' && result.type !== 'cancel') {
+          setError('Google sign in was not completed');
+        }
+        return;
+      }
+
+      const idToken = result.authentication?.idToken;
+      if (!idToken) {
+        setError('Google sign in did not return an id token');
+        return;
+      }
+
+      const firebaseUser = await continueWithGoogle(idToken);
+      const userEmail = (firebaseUser.email || '').trim().toLowerCase();
+
+      if (firebaseUser.uid && userEmail) {
+        await ensureUserProfile(firebaseUser.uid, userEmail);
+      }
+
+      router.replace('/');
+    } catch (e: any) {
+      setError(e?.message || 'Google sign in failed');
     } finally {
       setLoading(false);
     }
@@ -172,6 +216,20 @@ export default function LoginScreen() {
               <Text style={styles.primaryBtnText}>Sign In</Text>
             )}
           </Pressable>
+
+          {googleEnabled ? (
+            <Pressable
+              style={({ pressed }) => [
+                styles.googleBtn,
+                { opacity: pressed || loading ? 0.85 : 1 },
+              ]}
+              onPress={handleGoogleAuth}
+              disabled={loading || !googleRequest}
+            >
+              <Ionicons name="logo-google" size={18} color={C.text} />
+              <Text style={styles.googleBtnText}>Continue with Google</Text>
+            </Pressable>
+          ) : null}
 
           <View style={styles.divider}>
             <View style={styles.dividerLine} />
@@ -301,5 +359,21 @@ const styles = StyleSheet.create({
     fontFamily: 'Outfit_600SemiBold',
     fontSize: 16,
     color: C.textSecondary,
+  },
+  googleBtn: {
+    height: 52,
+    borderRadius: 12,
+    borderWidth: 1.5,
+    borderColor: C.border,
+    backgroundColor: C.surface,
+    alignItems: 'center',
+    justifyContent: 'center',
+    flexDirection: 'row',
+    gap: 10,
+  },
+  googleBtnText: {
+    fontFamily: 'Outfit_600SemiBold',
+    fontSize: 16,
+    color: C.text,
   },
 });

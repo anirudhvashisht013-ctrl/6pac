@@ -455,6 +455,11 @@ export function createUserWithEmailAndPassword(email: string, password: string) 
   return FirebaseAuth.createUserWithEmailAndPassword(getFirebaseAuth(), email, password);
 }
 
+export function signInWithGoogleIdToken(idToken: string) {
+  const credential = FirebaseAuth.GoogleAuthProvider.credential(idToken);
+  return FirebaseAuth.signInWithCredential(getFirebaseAuth(), credential);
+}
+
 export function signOut() {
   return FirebaseAuth.signOut(getFirebaseAuth());
 }

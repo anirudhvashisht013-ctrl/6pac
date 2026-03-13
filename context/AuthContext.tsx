@@ -11,6 +11,7 @@ import {
   onAuthStateChanged,
   signInWithEmailAndPassword,
   createUserWithEmailAndPassword,
+  signInWithGoogleIdToken,
   signOut,
   type FirebaseUser,
 } from "@/lib/firebase";
@@ -51,6 +52,7 @@ export interface AuthContextValue {
 
   login: (email: string, password: string) => Promise<FirebaseUser>;
   signUp: (email: string, password: string) => Promise<FirebaseUser>;
+  continueWithGoogle: (idToken: string) => Promise<FirebaseUser>;
   logout: () => Promise<void>;
 
   /**
@@ -229,6 +231,32 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setIsProfileComplete(false);
   };
 
+  const continueWithGoogle = async (idToken: string): Promise<FirebaseUser> => {
+    const cred = await signInWithGoogleIdToken(idToken);
+    const uid = cred.user.uid;
+    const userEmail = (cred.user.email || "").trim().toLowerCase();
+
+    if (!userEmail) {
+      throw new Error("Google account did not provide an email address.");
+    }
+
+    await ensureUserProfile(uid, userEmail);
+    try {
+      await ensureMyFriendRefId(uid);
+    } catch (error) {
+      logError("Friend ref id bootstrap failed after Google auth", error, { uid });
+    }
+
+    try {
+      const profile = await getAccountProfileCore(uid);
+      setIsProfileComplete(!!profile?.onboardingDone);
+    } catch {
+      setIsProfileComplete(false);
+    }
+
+    return cred.user;
+  };
+
   const updateUser = useCallback(async (updates: OnboardingUpdates) => {
     const uid = user?.id;
     if (!uid) throw new Error("Session missing. Please login again.");
@@ -246,6 +274,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       isProfileComplete,
       login,
       signUp,
+      continueWithGoogle,
       logout,
       updateUser,
     }),

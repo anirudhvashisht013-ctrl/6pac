@@ -10,13 +10,16 @@ import {
   ScrollView,
   ActivityIndicator,
 } from 'react-native';
-import * as Google from 'expo-auth-session/providers/google';
 import { router } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { C } from '@/constants/colors';
 import { useAuth } from '@/context/AuthContext';
-import { getGoogleAuthRequestConfig, isGoogleAuthAvailable } from '@/lib/auth/googleAuth';
+import {
+  isGoogleAuthAvailable,
+  mapGoogleAuthError,
+  signInWithGoogleNative,
+} from '@/lib/auth/googleAuth';
 import { ensureUserProfile } from '@/lib/userProfile';
 
 export default function LoginScreen() {
@@ -29,7 +32,6 @@ export default function LoginScreen() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const googleEnabled = isGoogleAuthAvailable();
-  const [googleRequest, , promptGoogleAuth] = Google.useIdTokenAuthRequest(getGoogleAuthRequestConfig());
 
   const mapFirebaseError = (code: string) => {
     switch (code) {
@@ -81,7 +83,7 @@ export default function LoginScreen() {
   };
 
   const handleGoogleAuth = async () => {
-    if (!googleEnabled || !googleRequest) {
+    if (!googleEnabled) {
       setError('Google sign in is not available in this app build');
       return;
     }
@@ -90,18 +92,8 @@ export default function LoginScreen() {
     setError('');
 
     try {
-      const result = await promptGoogleAuth();
-
-      if (result.type !== 'success') {
-        if (result.type !== 'dismiss' && result.type !== 'cancel') {
-          setError('Google sign in was not completed');
-        }
-        return;
-      }
-
-      const idToken = result.authentication?.idToken;
+      const idToken = await signInWithGoogleNative();
       if (!idToken) {
-        setError('Google sign in did not return an id token');
         return;
       }
 
@@ -113,8 +105,9 @@ export default function LoginScreen() {
       }
 
       router.replace('/');
-    } catch (e: any) {
-      setError(e?.message || 'Google sign in failed');
+    } catch (e: unknown) {
+      const message = mapGoogleAuthError(e);
+      if (message) setError(message);
     } finally {
       setLoading(false);
     }
@@ -224,7 +217,7 @@ export default function LoginScreen() {
                 { opacity: pressed || loading ? 0.85 : 1 },
               ]}
               onPress={handleGoogleAuth}
-              disabled={loading || !googleRequest}
+              disabled={loading}
             >
               <Ionicons name="logo-google" size={18} color={C.text} />
               <Text style={styles.googleBtnText}>Continue with Google</Text>

@@ -93,6 +93,7 @@ export default ({ config }: ConfigContext): ExpoConfig => {
           origin: "https://replit.com/",
         },
       ],
+      "@react-native-google-signin/google-signin",
       "expo-font",
       "expo-notifications",
       "expo-web-browser",

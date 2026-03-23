@@ -3,6 +3,7 @@ const DEV_MODE = typeof __DEV__ !== "undefined" && __DEV__;
 export type PublicIdentityClaimDocument = {
   uid?: string;
   refId?: string;
+  displayName?: string | null;
   createdAt?: unknown;
   updatedAt?: unknown;
 };
@@ -12,6 +13,7 @@ export type PublicIdentityClaimBoundary = {
   claim: {
     uid?: string;
     friendRefId?: string;
+    displayName?: string | null;
   };
   metadata: {
     createdAt?: unknown;
@@ -30,6 +32,7 @@ function logPublicIdentityRecovery(
   console.warn(`[public-identity]${label} ${message}`, {
     uid: raw.uid,
     refId: raw.refId,
+    displayName: raw.displayName,
   });
 }
 
@@ -42,6 +45,7 @@ export function toPublicIdentityClaimDocument(
   const recovered: string[] = [];
   if (raw.uid != null && typeof raw.uid !== "string") recovered.push("uid");
   if (raw.refId != null && typeof raw.refId !== "string") recovered.push("refId");
+  if (raw.displayName != null && typeof raw.displayName !== "string") recovered.push("displayName");
 
   if (recovered.length > 0) {
     logPublicIdentityRecovery(
@@ -54,6 +58,7 @@ export function toPublicIdentityClaimDocument(
   return {
     uid: typeof raw.uid === "string" ? raw.uid : undefined,
     refId: typeof raw.refId === "string" ? raw.refId : undefined,
+    displayName: raw.displayName == null ? null : typeof raw.displayName === "string" ? raw.displayName : null,
     createdAt: raw.createdAt,
     updatedAt: raw.updatedAt,
   };
@@ -70,6 +75,7 @@ export function toPublicIdentityClaimBoundary(
     claim: {
       uid: doc.uid,
       friendRefId: doc.refId,
+      displayName: doc.displayName,
     },
     metadata: {
       createdAt: doc.createdAt,

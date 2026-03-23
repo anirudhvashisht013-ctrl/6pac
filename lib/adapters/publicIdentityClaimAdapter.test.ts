@@ -9,11 +9,13 @@ test("public identity claim boundary isolates discoverability ownership", () => 
   const boundary = toPublicIdentityClaimBoundary({
     uid: "user-1",
     refId: "abc123",
+    displayName: "User One",
     createdAt: "2026-03-12T00:00:00.000Z",
   });
 
   assert.equal(boundary?.claim.uid, "user-1");
   assert.equal(boundary?.claim.friendRefId, "abc123");
+  assert.equal(boundary?.claim.displayName, "User One");
   assert.equal(boundary?.metadata.createdAt, "2026-03-12T00:00:00.000Z");
 });
 

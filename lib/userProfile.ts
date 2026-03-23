@@ -1,5 +1,6 @@
 import { getFirebaseDb } from "@/lib/firebase";
 import { doc, getDoc, setDoc, serverTimestamp } from "firebase/firestore";
+import { syncMyPublicIdentityClaim } from "@/lib/friends/service";
 import {
   getAccountProfileBridgeBoundary,
   getAccountProfileCoreBoundary,
@@ -89,6 +90,8 @@ export async function markOnboardingDone(
     } satisfies Partial<UserProfileDoc>,
     { merge: true }
   );
+
+  await syncMyPublicIdentityClaim(uid, data.fullName);
 }
 
 /**
@@ -110,6 +113,10 @@ export async function updateUserProfile(
     } satisfies Partial<UserProfileDoc>,
     { merge: true }
   );
+
+  if (Object.prototype.hasOwnProperty.call(updates, "fullName")) {
+    await syncMyPublicIdentityClaim(uid, updates.fullName ?? null);
+  }
 }
 
 // Target-facing repo contract for AccountProfile semantics.

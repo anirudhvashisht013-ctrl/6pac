@@ -131,10 +131,16 @@ function normalizeRefFromUnknown(raw: unknown): string | null {
   return isValidFriendRefId(normalized) ? normalized : null;
 }
 
-async function getPublicIdentityClaimForUid(
+function normalizePublicDisplayName(raw: unknown): string | null {
+  if (typeof raw !== "string") return null;
+  const trimmed = raw.trim();
+  return trimmed.length > 0 ? trimmed : null;
+}
+
+async function getPublicIdentityClaimBoundaryForUid(
   uid: string,
   hintedFriendRefId?: string | null
-): Promise<string | null> {
+){
   const hinted = normalizeRefFromUnknown(hintedFriendRefId);
   if (hinted) {
     const hintedSnap = await getDoc(doc(getFirebaseDb(), FRIEND_REFS_COLLECTION, hinted));
@@ -143,7 +149,7 @@ async function getPublicIdentityClaimForUid(
       "friends:hinted-public-identity"
     );
     if (hintedSnap.exists() && hintedBoundary?.claim.uid === uid) {
-      return normalizeRefFromUnknown(hintedBoundary.claim.friendRefId);
+      return hintedBoundary;
     }
   }
 
@@ -152,7 +158,7 @@ async function getPublicIdentityClaimForUid(
   );
   const firstClaim = claimSnaps.docs[0];
   if (!firstClaim) {
-    return hinted || null;
+    return null;
   }
 
   const boundary = toPublicIdentityClaimBoundary(
@@ -160,23 +166,18 @@ async function getPublicIdentityClaimForUid(
     "friends:public-identity-query"
   );
 
-  return normalizeRefFromUnknown(boundary?.claim.friendRefId) || hinted || null;
+  return boundary;
 }
 
 async function getUserSummary(uid: string): Promise<FriendUserSummary> {
-  const profileSnap = await getDoc(doc(getFirebaseDb(), "users", uid));
-  const boundary = toAccountProfileBoundary(
-    (profileSnap.data() || {}) as Record<string, unknown>,
-    "friends:user-summary"
-  );
-  const publicFriendRefId = await getPublicIdentityClaimForUid(uid, boundary?.bridge.friendRefId);
+  const publicIdentity = await getPublicIdentityClaimBoundaryForUid(uid);
+  const publicFriendRefId = normalizeRefFromUnknown(publicIdentity?.claim.friendRefId);
+  const publicDisplayName = normalizePublicDisplayName(publicIdentity?.claim.displayName);
 
   return {
     uid,
-    fullName: boundary?.core.fullName || null,
-    email: boundary?.core.email || null,
-    // Public discoverability should prefer the public identity claim store.
-    // users/{uid}.friendRefId remains a tolerated bridge field for bootstrap convenience.
+    fullName: publicDisplayName,
+    email: null,
     friendRefId: publicFriendRefId,
   };
 }
@@ -349,6 +350,7 @@ export async function ensureMyFriendRefId(uid: string): Promise<string> {
           "friends:ensure-my-friend-ref"
         );
         const existing = normalizeRefFromUnknown(profileBoundary?.bridge.friendRefId);
+        const publicDisplayName = normalizePublicDisplayName(profileBoundary?.core.fullName);
 
         if (existing) {
           const existingRef = doc(getFirebaseDb(), FRIEND_REFS_COLLECTION, existing);
@@ -361,6 +363,7 @@ export async function ensureMyFriendRefId(uid: string): Promise<string> {
               {
                 uid,
                 refId: existing,
+                displayName: publicDisplayName,
                 updatedAt: serverTimestamp(),
                 createdAt: serverTimestamp(),
               },
@@ -396,6 +399,7 @@ export async function ensureMyFriendRefId(uid: string): Promise<string> {
           {
             uid,
             refId: candidate,
+            displayName: publicDisplayName,
             createdAt: serverTimestamp(),
             updatedAt: serverTimestamp(),
           },
@@ -423,6 +427,23 @@ export async function ensureMyFriendRefId(uid: string): Promise<string> {
   }
 
   throw new Error("unable_to_allocate_friend_id");
+}
+
+export async function syncMyPublicIdentityClaim(uid: string, fullName?: string | null): Promise<void> {
+  const friendRefId = await ensureMyFriendRefId(uid);
+  const publicRef = doc(getFirebaseDb(), FRIEND_REFS_COLLECTION, friendRefId);
+
+  await setDoc(
+    publicRef,
+    {
+      uid,
+      refId: friendRefId,
+      displayName: normalizePublicDisplayName(fullName),
+      updatedAt: serverTimestamp(),
+      createdAt: serverTimestamp(),
+    },
+    { merge: true }
+  );
 }
 
 export async function searchUserByFriendRefId(currentUid: string, rawValue: string): Promise<FriendSearchResult> {

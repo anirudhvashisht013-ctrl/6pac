@@ -15,7 +15,7 @@ work, screen redesigns, or daily-loop restructure — those are later phases.
 **Status:** ✅ All 4 items done + cleanup pass · unit tests 39/39 pass ·
 `tsc --noEmit` **fully clean (0 errors) at HEAD**.
 
-**Commit:** `__PHASE0_COMMIT__` (`Phase 0: trust + workout-player fixes`).
+**Commit:** `34522cc` (`Phase 0: trust + workout-player fixes`).
 
 ### 0 — Firebase sign-up — CONFIRMED env artifact, **no code bug**
 - Traced the config path end-to-end: `process.env` is read **only** in `app.config.ts`

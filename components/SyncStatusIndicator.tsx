@@ -75,7 +75,7 @@ export default function SyncStatusIndicator() {
   }
 
   return (
-    <View style={[styles.wrap, { bottom: insets.bottom + 74 }]}>
+    <View style={[styles.wrap, { paddingTop: insets.top + 8 }]}>
       <View style={[styles.pill, { backgroundColor: bg, borderColor: border }]}>
         <View style={styles.contentRow}>
           <View style={{ flex: 1 }}>
@@ -111,9 +111,11 @@ export default function SyncStatusIndicator() {
 
 const styles = StyleSheet.create({
   wrap: {
-    position: "absolute",
-    left: 12,
-    right: 12,
+    // Inline top strip (not an overlay) so it never covers screen actions or
+    // the bottom tab bar. Background fills the safe-area notch above the pill.
+    paddingHorizontal: 12,
+    paddingBottom: 8,
+    backgroundColor: C.bg,
     zIndex: 30,
   },
   pill: {

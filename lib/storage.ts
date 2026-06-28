@@ -49,6 +49,8 @@ const KEY = {
   sessions: (uid: string) => `@6pac:sessions:${uid}`,
   measurements: (uid: string) => `@6pac:measurements:${uid}`,
   reminders: (uid: string) => `@6pac:reminders:${uid}`,
+  // One-time migration marker: forces all pre-existing templates to Private.
+  templatesPrivateV1: (uid: string) => `@6pac:migrations:templates-private-v1:${uid}`,
 };
 
 async function get<T>(key: string): Promise<T | null> {
@@ -71,7 +73,9 @@ function normalizeTemplate(template: WorkoutTemplate): WorkoutTemplate {
   return {
     ...template,
     notes: typeof template.notes === 'string' ? template.notes : null,
-    sharedWithFriends: template.sharedWithFriends !== false,
+    // Private-by-default: only an explicit `true` keeps a template shared.
+    // Undefined/missing sharing state migrates to Private (see workoutsRepo.getAll).
+    sharedWithFriends: template.sharedWithFriends === true,
   };
 }
 
@@ -312,8 +316,30 @@ export const schedulesRepo = {
 export const workoutsRepo = {
   async getAll(uid: string): Promise<WorkoutTemplate[]> {
     const raw = (await get<WorkoutTemplate[]>(KEY.templates(uid))) || [];
+
+    // One-time aggressive privacy migration (pre-launch). A stored `true` can't be
+    // trusted as a deliberate opt-in — older builds auto-coerced undefined -> true —
+    // so force EVERY pre-existing template to Private exactly once. After this runs,
+    // a template is shared only if the user actively opts in via the editor toggle or
+    // the Friends sharing screen. Guarded by a marker so future opt-ins are never reverted.
+    const privacyMigrated = await get<boolean>(KEY.templatesPrivateV1(uid));
+    if (!privacyMigrated) {
+      const forced = raw.map((template) => normalizeTemplate({ ...template, sharedWithFriends: false }));
+      if (forced.length > 0) {
+        await set(KEY.templates(uid), forced);
+        forced.forEach((template) => {
+          mirrorBestEffort(cloudMirrorRepo.upsertTemplate(uid, template), `templates/${template.id}:privacy-v1`);
+          mirrorBestEffort(syncSharedWorkoutTemplate(uid, template), `shared_workouts/${template.id}:privacy-v1`);
+        });
+      }
+      await set(KEY.templatesPrivateV1(uid), true);
+      return forced;
+    }
+
     const normalized = raw.map(normalizeTemplate);
 
+    // Steady state: persist any record whose stored sharing flag wasn't a boolean
+    // (e.g. a template synced from cloud without the field) so it settles to Private.
     const changed = normalized.filter((template, idx) => {
       const before = raw[idx];
       return !before || typeof before.sharedWithFriends !== "boolean";

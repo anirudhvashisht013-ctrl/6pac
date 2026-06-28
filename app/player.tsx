@@ -627,19 +627,19 @@ export default function PlayerScreen() {
             {block.notes ? <Text style={styles.blockNotes}>{block.notes}</Text> : null}
 
             <View style={styles.setsHeader}>
-              <Text style={[styles.setColHead, { flex: 0.3 }]}>Set</Text>
-              <Text style={[styles.setColHead, { flex: 1 }]}>Weight (kg)</Text>
-              <Text style={[styles.setColHead, { flex: 1 }]}>Reps</Text>
-              <Text style={[styles.setColHead, { flex: 0.4 }]}>Done</Text>
-              <Text style={[styles.setColHead, { width: 34 }]}> </Text>
+              <Text style={[styles.setColHead, styles.colSet]}>Set</Text>
+              <Text style={[styles.setColHead, styles.colInput]}>Weight (kg)</Text>
+              <Text style={[styles.setColHead, styles.colInput]}>Reps</Text>
+              <Text style={[styles.setColHead, styles.colDone]}>Done</Text>
+              <View style={styles.colRemove} />
             </View>
 
             {perf?.sets?.map((set, setIdx) => (
               <View key={setIdx} style={[styles.setRow, set.completed && styles.setRowDone]}>
-                <Text style={[styles.setNum, { flex: 0.3 }]}>{setIdx + 1}</Text>
+                <Text style={[styles.setNum, styles.colSet]}>{setIdx + 1}</Text>
 
                 <TextInput
-                  style={[styles.setInput, { flex: 1 }]}
+                  style={[styles.setInput, styles.colInput]}
                   value={set.weight != null ? String(set.weight) : ''}
                   onChangeText={v => updateSet(block.id, setIdx, { weight: parseFloat(v) || null })}
                   placeholder="—"
@@ -648,7 +648,7 @@ export default function PlayerScreen() {
                 />
 
                 <TextInput
-                  style={[styles.setInput, { flex: 1 }]}
+                  style={[styles.setInput, styles.colInput]}
                   value={set.reps != null ? String(set.reps) : ''}
                   onChangeText={v => updateSet(block.id, setIdx, { reps: parseInt(v) || null })}
                   placeholder="reps"
@@ -657,7 +657,7 @@ export default function PlayerScreen() {
                 />
 
                 <Pressable
-                  style={[styles.setCheck, { flex: 0.4 }, set.completed && styles.setCheckDone]}
+                  style={[styles.setCheck, styles.colDone, set.completed && styles.setCheckDone]}
                   onPress={() => {
                     updateSet(block.id, setIdx, { completed: !set.completed });
                     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
@@ -913,8 +913,16 @@ const styles = StyleSheet.create({
     paddingVertical: 6,
     borderBottomWidth: 1,
     borderBottomColor: C.border,
+    gap: 8,
   },
   setColHead: { fontFamily: 'Outfit_500Medium', fontSize: 12, color: C.textMuted, textAlign: 'center' },
+
+  // Shared responsive set-table columns (header + rows must match).
+  // Fixed side columns + flexible inputs guarantees fit at 320/390/430px.
+  colSet: { width: 26 },
+  colInput: { flex: 1, minWidth: 0 },
+  colDone: { width: 44 },
+  colRemove: { width: 34 },
 
   setRow: {
     flexDirection: 'row',

@@ -119,6 +119,7 @@ export default function ProfileFriendsScreen() {
   const { showToast } = useFeedbackToast();
 
   const [loading, setLoading] = useState(true);
+  const [loadFailed, setLoadFailed] = useState(false);
   const [dashboard, setDashboard] = useState<FriendsDashboard | null>(null);
 
   const [activeTab, setActiveTab] = useState<TabKey>("friends");
@@ -135,6 +136,24 @@ export default function ProfileFriendsScreen() {
   const [sharingExpanded, setSharingExpanded] = useState(false);
   const [shareToggleTemplateId, setShareToggleTemplateId] = useState<string | null>(null);
   const [selectAllBusy, setSelectAllBusy] = useState(false);
+
+  // User-initiated reload for the error screen's Retry. Only replaces the
+  // dashboard on success, so a failed retry never wipes already-cached data.
+  const reloadDashboard = useCallback(async () => {
+    if (!user) return;
+    setLoading(true);
+    setLoadFailed(false);
+    try {
+      const data = await loadFriendsDashboard(user.id);
+      setDashboard(data);
+    } catch (error) {
+      console.warn("friends reload failed", error);
+      setLoadFailed(true);
+      showToast({ message: "Unable to load friends right now.", tone: "error" });
+    } finally {
+      setLoading(false);
+    }
+  }, [user, showToast]);
 
   const loadTemplates = useCallback(async () => {
     if (!user) return;
@@ -156,15 +175,19 @@ export default function ProfileFriendsScreen() {
       let active = true;
       setLoading(true);
 
+      setLoadFailed(false);
+
       void loadFriendsDashboard(user.id)
         .then((data) => {
           if (!active) return;
           setDashboard(data);
+          setLoadFailed(false);
           setLoading(false);
         })
         .catch((error) => {
           if (!active) return;
           setLoading(false);
+          setLoadFailed(true);
           console.warn("friends initial load failed", error);
           showToast({ message: "Unable to load friends right now.", tone: "error" });
         });
@@ -382,8 +405,46 @@ export default function ProfileFriendsScreen() {
 
   if (!user || !dashboard) {
     return (
-      <View style={[styles.center, { backgroundColor: C.bg }]}>
-        <Text style={styles.emptyText}>Unable to load friends.</Text>
+      <View style={{ flex: 1, backgroundColor: C.bg }}>
+        <View
+          style={[
+            styles.content,
+            { paddingTop: insets.top + (Platform.OS === "web" ? 67 : 20), flex: 1 },
+          ]}
+        >
+          <View style={styles.headerRow}>
+            <Pressable style={styles.backBtn} onPress={() => router.back()}>
+              <Ionicons name="chevron-back" size={18} color={C.text} />
+              <Text style={styles.backText}>Profile</Text>
+            </Pressable>
+          </View>
+
+          <Text style={styles.pageTitle}>Friends</Text>
+
+          <View style={styles.errorBox}>
+            <Ionicons name="cloud-offline-outline" size={36} color={C.textMuted} />
+            <Text style={styles.errorTitle}>Couldn&apos;t load friends</Text>
+            <Text style={styles.errorBody}>
+              Check your connection and try again. Your data is safe.
+            </Text>
+            <Pressable
+              style={({ pressed }) => [styles.retryBtn, pressed && { opacity: 0.85 }]}
+              onPress={() => {
+                void reloadDashboard();
+              }}
+              disabled={loading}
+            >
+              {loading ? (
+                <ActivityIndicator color={C.bg} size="small" />
+              ) : (
+                <>
+                  <Ionicons name="refresh" size={16} color={C.bg} />
+                  <Text style={styles.retryText}>Retry</Text>
+                </>
+              )}
+            </Pressable>
+          </View>
+        </View>
       </View>
     );
   }
@@ -899,4 +960,26 @@ const styles = StyleSheet.create({
   emptyWrap: { gap: 10 },
   emptyText: { fontFamily: "Outfit_400Regular", fontSize: 13, color: C.textMuted },
   disabled: { opacity: 0.5 },
+  errorBox: { alignItems: "center", justifyContent: "center", gap: 10, paddingVertical: 48 },
+  errorTitle: { fontFamily: "Outfit_600SemiBold", fontSize: 17, color: C.text },
+  errorBody: {
+    fontFamily: "Outfit_400Regular",
+    fontSize: 13,
+    color: C.textMuted,
+    textAlign: "center",
+    maxWidth: 280,
+  },
+  retryBtn: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 8,
+    minHeight: 44,
+    minWidth: 120,
+    paddingHorizontal: 20,
+    borderRadius: 12,
+    backgroundColor: C.primary,
+    marginTop: 6,
+  },
+  retryText: { fontFamily: "Outfit_600SemiBold", fontSize: 15, color: C.bg },
 });

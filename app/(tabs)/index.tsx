@@ -46,7 +46,7 @@ export default function TodayScreen() {
 
   // The day currently being viewed/edited. Defaults to today; can be moved back
   // to surface previously logged days (data is already stored per date).
-  const [selectedDate, setSelectedDate] = useState<string>(today);
+  const [selectedDate, setSelectedDate] = useState<ISODate>(today);
   const isToday = selectedDate === today;
 
   const [log, setLog] = useState<DailyLog | null>(null);

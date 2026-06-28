@@ -2,7 +2,7 @@
 import React, { useMemo, useState, useEffect } from 'react';
 import {
   View, Text, ScrollView, StyleSheet, Pressable,
-  TextInput, ActivityIndicator, Modal, Alert,
+  TextInput, ActivityIndicator, Modal, Alert, Switch,
 } from 'react-native';
 import { router, useLocalSearchParams } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -102,7 +102,7 @@ export default function EditorScreen() {
 
   const [name, setName] = useState('');
   const [notes, setNotes] = useState('');
-  const [sharedWithFriends, setSharedWithFriends] = useState(true);
+  const [sharedWithFriends, setSharedWithFriends] = useState(false);
   const [blocks, setBlocks] = useState<WorkoutBlock[]>([]);
   const [exercises, setExercises] = useState<ExerciseLibraryItem[]>([]);
   const [loading, setLoading] = useState(true);
@@ -151,7 +151,7 @@ export default function EditorScreen() {
           setName('');
           setNotes('');
           setBlocks([]);
-          setSharedWithFriends(true);
+          setSharedWithFriends(false);
         }
 
         setExercises(exerciseLibrary.sort((a, b) => a.name.localeCompare(b.name)));
@@ -366,6 +366,23 @@ export default function EditorScreen() {
             multiline
             numberOfLines={3}
             textAlignVertical="top"
+          />
+        </View>
+
+        <View style={styles.shareRow}>
+          <View style={styles.shareTextWrap}>
+            <Text style={styles.shareLabel}>Share with friends</Text>
+            <Text style={styles.shareHint}>
+              {sharedWithFriends
+                ? 'Friends can see and copy this workout.'
+                : 'Private — only you can see this workout.'}
+            </Text>
+          </View>
+          <Switch
+            value={sharedWithFriends}
+            onValueChange={setSharedWithFriends}
+            trackColor={{ false: C.border, true: C.primary + '66' }}
+            thumbColor={sharedWithFriends ? C.primary : C.textMuted}
           />
         </View>
 
@@ -634,6 +651,23 @@ const styles = StyleSheet.create({
     fontSize: 15,
     color: C.text,
   },
+  shareRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 12,
+    backgroundColor: C.surface2,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: C.border,
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+    marginBottom: 24,
+  },
+  shareTextWrap: { flex: 1, gap: 2 },
+  shareLabel: { fontFamily: 'Outfit_600SemiBold', fontSize: 15, color: C.text },
+  shareHint: { fontFamily: 'Outfit_400Regular', fontSize: 12, color: C.textMuted },
+
   blocksHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 },
   sectionTitle: { fontFamily: 'Outfit_600SemiBold', fontSize: 16, color: C.textSecondary },
   addBlockBtn: {

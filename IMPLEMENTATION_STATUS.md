@@ -6,6 +6,86 @@
 
 ---
 
+# 🚦 Phase 0 — Trust & the Broken Task
+**As of June 28, 2026**
+
+**Scope:** the 4 Phase-0 items only (trust + the one broken task). No design-system
+work, screen redesigns, or daily-loop restructure — those are later phases.
+
+**Status:** ✅ All 4 items done + cleanup pass · unit tests 39/39 pass ·
+`tsc --noEmit` **fully clean (0 errors) at HEAD**.
+
+**Commit:** `__PHASE0_COMMIT__` (`Phase 0: trust + workout-player fixes`).
+
+### 0 — Firebase sign-up — CONFIRMED env artifact, **no code bug**
+- Traced the config path end-to-end: `process.env` is read **only** in `app.config.ts`
+  (build/config time) → `expo.extra.firebase` → `lib/config/runtimeConfig.ts`
+  (reads `Constants.expoConfig.extra`, never `process.env`) → `lib/firebase.ts`.
+  Runtime never touches `process.env`. The only other runtime `process.env` read is
+  `lib/query-client.ts` (domain, not Firebase).
+- `npm run validate:firebase-config` fails (exit 1) here **as expected** — no `.env` in
+  this environment — with clear per-key messages. That is exactly the audit's
+  `api-key-not-valid` cause: missing env in a sandbox. Real builds inject keys via EAS.
+- **No config change.** Error messaging is already clear (`validateFirebaseConfig` →
+  `formatFirebaseValidationIssues`), so no message edit was needed.
+- **Verdict:** environment artifact. The 5-minute real-build sign-up test still recommended to close it out.
+
+### 1 — Workout-player set-row overflow (critical) — `app/player.tsx`
+- Set table was `Set flex:0.3 / Weight flex:1 / Reps flex:1 / Done flex:0.4 / remove w:34`.
+  The flex inputs had no `minWidth:0`, the classic flexbox cause of the off-screen overflow
+  the web-sandbox audit saw at ~390px.
+- **Fix:** pinned the three non-input columns to fixed compact widths
+  (`colSet 26 / colDone 44 / colRemove 34`) and made the two inputs `flex:1, minWidth:0`,
+  with `gap:8` on both header and rows. Guarantees fit at 320 / 390 / 430px with no
+  horizontal scroll. Header now aligns to the same columns.
+- **Verified:** width math at 320/390/430 (inputs ≥72px even at 320); `tsc` clean for this file; design unchanged (same colours/spacing/font).
+
+### 2 — Private-by-default workouts — `app/editor.tsx`, `lib/storage.ts`
+- New templates defaulted to **shared** (`useState(true)` + reset branch `true`). Flipped both to `false`.
+- Steady-state coercion: `normalizeTemplate` changed `!== false` → `=== true`, so undefined/missing
+  sharing settles to Private and explicit opt-ins are preserved.
+- **Aggressive one-time migration (cleanup pass):** `workoutsRepo.getAll` now force-sets **every
+  pre-existing template to Private** once, gated by a per-uid marker
+  (`@6pac:migrations:templates-private-v1`). A stored `true` couldn't be trusted as a deliberate
+  opt-in (older builds auto-coerced undefined → true), so this fully closes the
+  "nothing shared without an explicit opt-in" goal. Pre-launch, so safe. Un-shares from cloud
+  via `shared_workouts` too. After it runs, sharing is only ever `true` via a deliberate
+  editor/Friends opt-in (the marker prevents future opt-ins from being reverted).
+- Privacy **is** surfaced in the UI (the Friends sharing screen shows per-workout
+  Shared/Private toggles). Added a "Share with friends" `Switch` row to the editor too
+  (private by default, with a one-line hint) so the choice is explicit at creation.
+- **Verified:** `tsc` clean; 39/39 tests pass (no normalization regression).
+
+### 3 — No more dead-end failures
+- **Friends** (`app/profile-friends.tsx`): the bare "Unable to load friends." screen now
+  has a title ("Friends"), a **Back** action (→ Profile), and a **Retry** button
+  (`reloadDashboard`, with spinner). Cached data is preserved — `dashboard` is only
+  replaced on success, so a failed retry never wipes a previously-loaded list, and the
+  error screen only shows when there is no dashboard at all.
+- **Sync banner** (`components/SyncStatusIndicator.tsx` + `app/(tabs)/_layout.tsx`): was an
+  absolute overlay at `bottom: insets.bottom + 74`, covering bottom action buttons. Converted
+  to an **inline top strip** in normal layout flow (mounted above the Tabs navigator), so it
+  never covers actions or the bottom tab bar.
+- **Verified:** `tsc` clean; visual structure matches existing design tokens.
+
+### Cleanup pass (post-review) — `app/(tabs)/index.tsx`
+- Fixed the 2 leftover `DateLike` type errors (lines 90 & 270): `selectedDate` was
+  `useState<string>` but seeded from `todayYMD()` and only ever set via `toYMD(...)`, both
+  `ISODate`. Re-typed the state as `ISODate` (the same branding fix the Stabilization Pass
+  used elsewhere). All setter call sites already produced `ISODate`, so this is a pure type
+  correction. **`tsc --noEmit` is now fully clean at HEAD.**
+
+### Known limitation (noted, accepted pre-launch)
+- The aggressive privacy migration's marker is stored **locally** (AsyncStorage). On a fresh
+  reinstall it would re-run against reconciled cloud data and re-force Private. Harmless
+  pre-launch; revisit (cloud-backed marker) only if it matters post-launch.
+
+**Files touched:** `app/player.tsx`, `app/editor.tsx`, `lib/storage.ts`,
+`app/profile-friends.tsx`, `components/SyncStatusIndicator.tsx`, `app/(tabs)/_layout.tsx`,
+`app/(tabs)/index.tsx`.
+
+---
+
 # 🩹 v1.0 Stabilization Pass
 **As of June 28, 2026**
 

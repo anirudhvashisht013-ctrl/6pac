@@ -147,8 +147,12 @@ function ClassicTabLayout() {
 export default function TabLayout() {
   return (
     <View style={{ flex: 1 }}>
-      <ClassicTabLayout />
+      {/* Inline top strip — sits in the layout flow so it never overlays
+          screen actions or the bottom tab bar. */}
       <SyncStatusIndicator />
+      <View style={{ flex: 1 }}>
+        <ClassicTabLayout />
+      </View>
     </View>
   );
 }

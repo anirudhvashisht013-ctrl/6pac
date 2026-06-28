@@ -375,7 +375,8 @@ export default function WeekScreen() {
   const selectedTabIndex = weekTabs.indexOf(weekStart);
   const canGoPrevious = selectedTabIndex > 0;
   const canGoNext = selectedTabIndex >= 0 && selectedTabIndex < weekTabs.length - 1;
-  const isWeekReady = schedule.days.every((d) => d.status !== 'unplanned');
+  const unplannedCount = schedule.days.filter((d) => d.status === 'unplanned').length;
+  const isWeekReady = unplannedCount === 0;
 
   const saveTarget = async () => {
     if (!user) return;
@@ -616,16 +617,18 @@ export default function WeekScreen() {
         </View>
 
         {!isWeekReady && (
-          <View style={styles.warningBanner}>
-            <Ionicons name="warning-outline" size={16} color={C.warning} />
-            <Text style={styles.warningText}>Plan all days to enable workouts</Text>
+          <View style={styles.infoBanner}>
+            <Ionicons name="information-circle-outline" size={16} color={C.textSecondary} />
+            <Text style={styles.infoBannerText}>
+              {unplannedCount} day{unplannedCount !== 1 ? 's' : ''} still unplanned. Planned days can start workouts.
+            </Text>
           </View>
         )}
 
         {isWeekReady && (
           <View style={styles.readyBanner}>
             <Ionicons name="checkmark-circle" size={16} color={C.success} />
-            <Text style={styles.readyText}>Week planned — workouts enabled</Text>
+            <Text style={styles.readyText}>Week fully planned</Text>
           </View>
         )}
 
@@ -965,12 +968,12 @@ const styles = StyleSheet.create({
     fontSize: 11,
     color: C.textSecondary,
   },
-  warningBanner: {
+  infoBanner: {
     flexDirection: 'row', alignItems: 'center', gap: 8,
-    backgroundColor: C.warningBg, borderRadius: 10, padding: 12, marginBottom: 16,
-    borderWidth: 1, borderColor: C.warning + '40',
+    backgroundColor: C.surface3, borderRadius: 10, padding: 12, marginBottom: 16,
+    borderWidth: 1, borderColor: C.border,
   },
-  warningText: { fontFamily: 'Outfit_500Medium', fontSize: 14, color: C.warning, flex: 1 },
+  infoBannerText: { fontFamily: 'Outfit_500Medium', fontSize: 14, color: C.textSecondary, flex: 1 },
   readyBanner: {
     flexDirection: 'row', alignItems: 'center', gap: 8,
     backgroundColor: C.successBg, borderRadius: 10, padding: 12, marginBottom: 16,

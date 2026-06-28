@@ -8,6 +8,7 @@ export type AccountProfileCore = {
   dateOfBirth?: string;
   sex?: "male" | "female" | "other";
   currentWeightKg?: number;
+  heightCm?: number;
   goalType?: "lean" | "recomp" | "buffed";
   createdAt?: unknown;
   updatedAt?: unknown;
@@ -82,6 +83,7 @@ export function toAccountProfileDocument(
         : undefined,
     currentWeightKg:
       typeof raw.currentWeightKg === "number" ? raw.currentWeightKg : undefined,
+    heightCm: typeof raw.heightCm === "number" ? raw.heightCm : undefined,
     goalType:
       raw.goalType === "lean" || raw.goalType === "recomp" || raw.goalType === "buffed"
         ? raw.goalType
@@ -111,6 +113,7 @@ export function toAccountProfileBoundary(
       dateOfBirth: doc.dateOfBirth,
       sex: doc.sex,
       currentWeightKg: doc.currentWeightKg,
+      heightCm: doc.heightCm,
       goalType: doc.goalType,
       createdAt: doc.createdAt,
       updatedAt: doc.updatedAt,

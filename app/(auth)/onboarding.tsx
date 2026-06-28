@@ -10,7 +10,7 @@ import { C } from '@/constants/colors';
 import { useAuth } from '@/context/AuthContext';
 import { migrateAllDataToCloud } from '@/lib/dev/migrate';
 
-type Step = 'name' | 'dob' | 'sex' | 'weight' | 'goal';
+type Step = 'name' | 'dob' | 'sex' | 'weight' | 'height' | 'goal';
 
 const GOALS = [
   { id: 'lean', label: 'Lean Body', desc: 'Cut fat, stay athletic', icon: 'flash' },
@@ -24,7 +24,7 @@ const SEXES = [
   { id: 'other', label: 'Other' },
 ] as const;
 
-const STEPS: Step[] = ['name', 'dob', 'sex', 'weight', 'goal'];
+const STEPS: Step[] = ['name', 'dob', 'sex', 'weight', 'height', 'goal'];
 
 export default function OnboardingScreen() {
   const insets = useSafeAreaInsets();
@@ -35,6 +35,7 @@ export default function OnboardingScreen() {
   const [dob, setDob] = useState('');
   const [sex, setSex] = useState<'male' | 'female' | 'other'>('male');
   const [weight, setWeight] = useState('');
+  const [height, setHeight] = useState('');
   const [goal, setGoal] = useState<'lean' | 'recomp' | 'buffed'>('recomp');
 
   const [loading, setLoading] = useState(false);
@@ -90,6 +91,16 @@ export default function OnboardingScreen() {
         setError('Enter a valid weight (30–300 kg)');
         return;
       }
+      setStep('height');
+      return;
+    }
+
+    if (step === 'height') {
+      const h = parseFloat(height);
+      if (!height || Number.isNaN(h) || h < 100 || h > 250) {
+        setError('Enter a valid height (100–250 cm)');
+        return;
+      }
       setStep('goal');
       return;
     }
@@ -103,6 +114,7 @@ export default function OnboardingScreen() {
 
     try {
       const w = parseFloat(weight);
+      const h = parseFloat(height);
 
       if (!fullName.trim()) {
         setError('Please enter your name');
@@ -116,6 +128,10 @@ export default function OnboardingScreen() {
         setError('Enter a valid weight (30–300 kg)');
         return;
       }
+      if (Number.isNaN(h) || h < 100 || h > 250) {
+        setError('Enter a valid height (100–250 cm)');
+        return;
+      }
       if (!user?.id) {
         setError('Session missing. Please login again.');
         return;
@@ -127,6 +143,7 @@ export default function OnboardingScreen() {
         dateOfBirth: dob,
         sex,
         currentWeightKg: w,
+        heightCm: h,
         goalType: goal,
       });
 
@@ -245,6 +262,29 @@ export default function OnboardingScreen() {
                 </View>
                 <View style={styles.unitBadge}>
                   <Text style={styles.unitText}>kg</Text>
+                </View>
+              </View>
+            </>
+          )}
+
+          {step === 'height' && (
+            <>
+              <Text style={styles.question}>How tall are you?</Text>
+              <Text style={styles.hint}>In centimeters</Text>
+              <View style={styles.weightInputRow}>
+                <View style={[styles.inputWrap, { flex: 1 }]}>
+                  <TextInput
+                    style={styles.input}
+                    value={height}
+                    onChangeText={setHeight}
+                    placeholder="e.g. 175"
+                    placeholderTextColor={C.textMuted}
+                    keyboardType="numeric"
+                    autoFocus
+                  />
+                </View>
+                <View style={styles.unitBadge}>
+                  <Text style={styles.unitText}>cm</Text>
                 </View>
               </View>
             </>

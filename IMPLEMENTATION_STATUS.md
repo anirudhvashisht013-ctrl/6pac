@@ -1,6 +1,56 @@
 # IMPLEMENTATION STATUS REPORT
 **As of March 4, 2026**
 
+> 📌 The original report below covers the **offline-sync architecture** (March 2026).
+> The **v1.0 Stabilization Pass** (June 2026) is tracked in the section immediately following.
+
+---
+
+# 🩹 v1.0 Stabilization Pass
+**As of June 28, 2026**
+
+**Scope:** fixing existing v1.0 gaps — *not* new features. No v2 calculation/coaching engine; goal toggles left inert.
+
+**Status:** ✅ All 4 waves complete · `tsc --noEmit` clean · unit tests 39/39 pass.
+
+**Files touched (uncommitted working tree):**
+`app/(auth)/login.tsx`, `app/(auth)/onboarding.tsx`, `app/(auth)/signup.tsx`, `app/(tabs)/index.tsx`, `app/(tabs)/nutrition.tsx`, `app/(tabs)/profile.tsx`, `app/(tabs)/week.tsx`, `app/(tabs)/workouts.tsx`, `app/profile-measurements.tsx`, `components/Streak.tsx`, `context/AuthContext.tsx`, `lib/adapters/accountProfileAdapter.ts`, `lib/firebase.ts`, `lib/friends/service.ts`, `lib/userProfile.ts`, **new** `lib/validation/email.ts`.
+
+### Wave 0 — Foundation (analysis only)
+- [x] Documented Firestore schemas for `weekly_plans`, `weekly_targets`, `nutrition_entries`, `body_measurements`, `workout_sessions`.
+- [x] Traced `caloriesManual`: dormant legacy field — only written by `lib/seed.ts`; real calories come from `nutrition_entries`. **Kept** as a harmless `|| 0` fallback (no deletion).
+
+### Wave 1 — Risk & correctness
+- [x] **Seed Data dev-gate** — `app/(tabs)/profile.tsx`: button now wrapped in `__DEV__`; never renders in production.
+- [x] **Height in onboarding** — new `height` step (cm, 100–250) in `onboarding.tsx`; persisted via `AuthContext` → `markOnboardingDone` → `users/{uid}.heightCm`; field added to `accountProfileAdapter`. Not wired to any calculation.
+- [x] **Forgot-password** — `sendPasswordResetEmail` wrapper in `lib/firebase.ts`; "Forgot password?" link on Sign In with inline success/error banners.
+- [x] **Email validation** — new `lib/validation/email.ts` (`isValidEmail`), used on Sign In + Create Account before hitting Firebase.
+- [x] **Friend-copy name bug** — `lib/friends/service.ts`: `"<Name> (Copy Tes)"` → `"<Name> (Copy)"` / `(Copy 2)`; removed 3-letter friend tag + unused owner-summary fetch.
+
+### Wave 2 — Friction reducers
+- [x] **Quick-log pills tappable** — `index.tsx`: Sleep/Steps/Water/Weight open their edit modal; Calories → Nutrition tab. Indicator states preserved.
+- [x] **Water minus control** — removed double-tap-to-remove; added a visible `−` button (disabled at 0); tap-a-glass still adds 250 ml.
+- [x] **Softened empty states** — `components/Streak.tsx`: "No streak yet" → "Your streak starts today" / welcoming day-one message.
+
+### Wave 3 — Surface existing data
+- [x] **Historical log view on Today** — `index.tsx`: date nav (prev / back-to-today / next), date-aware load + save; streak stays anchored to today via separate `todayLog`; past days editable; "next" disabled at today, "prev" clamped at account-creation date.
+- [x] **Weekly-plan gate loosened** — `app/(tabs)/workouts.tsx`: all-7-days requirement → any planned day; lock banner → informational unplanned-day count. `week.tsx` banner reworded to match.
+- [x] **Arms L on measurements** — `app/profile-measurements.tsx`: added `Arms L` next to `Arms R` on the summary card.
+- [x] **Nutrition date navigation** — *was* hard-limited to a 3-day window; `nutrition.tsx` now shows a 30-day window (today-first) so older dates are reachable.
+
+### Spec-vs-reality notes
+- Today pills are **Calories/Sleep/Steps/Water/Weight** (no "Supplements" pill — that's a separate toggle). Calories pill routes to Nutrition.
+- The "plan all 7 days" hard block lived in **`workouts.tsx`**, not `week.tsx` (whose `isWeekReady` only drove a banner).
+- The `docs/01–07…` audit files in the working tree are **pre-existing**, not part of this pass.
+
+### Intentionally left untouched
+- `caloriesManual` (dormant fallback), Lose/Maintain/Gain toggle, onboarding goal selector, "Off target" nutrition badge, BMR/TDEE/macros — all per the "Do NOT" scope.
+- `lib/reminders/engine.ts` has its **own** separate `isWeekReady` gating reminder scheduling — that's reminder behavior, out of scope, left as-is.
+
+### Workflow tooling added (so progress stays tracked)
+- **`CLAUDE.md`** — read each session; standing rules: read this file at session start, and update `IMPLEMENTATION_STATUS.md` on every feature push / before any commit.
+- **`.claude/settings.json` + `.claude/hooks/update-status-reminder.js`** — `PreToolUse(Bash)` hook: on `git commit`, if `IMPLEMENTATION_STATUS.md` isn't among pending changes it asks for confirmation; on `git push`, injects a soft reminder. Fails open.
+
 ---
 
 ## Executive Summary

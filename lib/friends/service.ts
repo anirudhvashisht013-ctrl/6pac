@@ -228,27 +228,18 @@ function toRequestView(
   };
 }
 
-function buildFriendCopyTag(fullName: string | null, email: string | null): string {
-  const source = (fullName || "").trim() || ((email || "").split("@")[0] || "").trim();
-  const cleaned = source.replace(/[^a-zA-Z]/g, "");
-  const tag = cleaned.slice(0, 3);
-  if (!tag) return "FRD";
-  if (tag.length === 1) return tag.toUpperCase();
-  return tag[0].toUpperCase() + tag.slice(1).toLowerCase();
-}
-
-function copyName(baseName: string, existingNames: Set<string>, friendCopyTag: string): string {
-  const base = `${baseName} (Copy ${friendCopyTag})`;
+function copyName(baseName: string, existingNames: Set<string>): string {
+  const base = `${baseName} (Copy)`;
   if (!existingNames.has(base.toLowerCase())) return base;
 
   let idx = 2;
   while (idx < 2000) {
-    const candidate = `${baseName} (Copy ${friendCopyTag} ${idx})`;
+    const candidate = `${baseName} (Copy ${idx})`;
     if (!existingNames.has(candidate.toLowerCase())) return candidate;
     idx += 1;
   }
 
-  return `${baseName} (Copy ${friendCopyTag} ${Date.now()})`;
+  return `${baseName} (Copy ${Date.now()})`;
 }
 
 async function writeDashboardCache(uid: string, dashboard: FriendsDashboard): Promise<void> {
@@ -885,19 +876,15 @@ export async function copySharedWorkoutToMyAccount(
     throw new Error("already_copied");
   }
 
-  const [existingTemplates, ownerSummary] = await Promise.all([
-    workoutsRepo.getAll(uid),
-    getUserSummary(sharedWorkout.ownerUid),
-  ]);
+  const existingTemplates = await workoutsRepo.getAll(uid);
   const existingNames = new Set(existingTemplates.map((template) => template.name.trim().toLowerCase()));
   const cloned = JSON.parse(JSON.stringify(sharedWorkout.template)) as WorkoutTemplate;
-  const friendCopyTag = buildFriendCopyTag(ownerSummary.fullName, ownerSummary.email);
 
   const now = new Date().toISOString();
   const duplicated: WorkoutTemplate = {
     ...cloned,
     id: Crypto.randomUUID(),
-    name: copyName(cloned.name, existingNames, friendCopyTag),
+    name: copyName(cloned.name, existingNames),
     sharedWithFriends: false,
     createdAt: now,
     updatedAt: now,

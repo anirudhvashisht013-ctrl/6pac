@@ -21,6 +21,8 @@ import {
   signInWithGoogleNative,
 } from '@/lib/auth/googleAuth';
 import { ensureUserProfile } from '@/lib/userProfile';
+import { sendPasswordResetEmail } from '@/lib/firebase';
+import { isValidEmail } from '@/lib/validation/email';
 
 export default function LoginScreen() {
   const insets = useSafeAreaInsets();
@@ -31,6 +33,7 @@ export default function LoginScreen() {
   const [showPassword, setShowPassword] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
+  const [info, setInfo] = useState('');
   const googleEnabled = isGoogleAuthAvailable();
 
   const mapFirebaseError = (code: string) => {
@@ -40,6 +43,8 @@ export default function LoginScreen() {
         return 'Invalid email or password';
       case 'auth/user-not-found':
         return 'No account found for this email';
+      case 'auth/invalid-email':
+        return 'Enter a valid email address';
       case 'auth/too-many-requests':
         return 'Too many attempts. Try again later';
       case 'auth/network-request-failed':
@@ -52,9 +57,38 @@ export default function LoginScreen() {
     }
   };
 
+  const handleForgotPassword = async () => {
+    setInfo('');
+    if (!email.trim()) {
+      setError('Enter your email to reset your password');
+      return;
+    }
+    if (!isValidEmail(email)) {
+      setError('Enter a valid email address');
+      return;
+    }
+
+    setLoading(true);
+    setError('');
+
+    try {
+      await sendPasswordResetEmail(email.trim());
+      setInfo('Password reset email sent. Check your inbox.');
+    } catch (e: any) {
+      setError(mapFirebaseError(e?.code));
+    } finally {
+      setLoading(false);
+    }
+  };
+
   const handleLogin = async () => {
+    setInfo('');
     if (!email.trim() || !password) {
       setError('Please fill in all fields');
+      return;
+    }
+    if (!isValidEmail(email)) {
+      setError('Enter a valid email address');
       return;
     }
 
@@ -142,6 +176,13 @@ export default function LoginScreen() {
             </View>
           ) : null}
 
+          {info ? (
+            <View style={styles.infoBox}>
+              <Ionicons name="checkmark-circle" size={16} color={C.primary} />
+              <Text style={styles.infoText}>{info}</Text>
+            </View>
+          ) : null}
+
           <View style={styles.inputGroup}>
             <Text style={styles.label}>Email</Text>
             <View style={styles.inputWrap}>
@@ -194,6 +235,15 @@ export default function LoginScreen() {
               </Pressable>
             </View>
           </View>
+
+          <Pressable
+            onPress={handleForgotPassword}
+            disabled={loading}
+            style={styles.forgotBtn}
+            hitSlop={8}
+          >
+            <Text style={styles.forgotText}>Forgot password?</Text>
+          </Pressable>
 
           <Pressable
             style={({ pressed }) => [
@@ -291,6 +341,31 @@ const styles = StyleSheet.create({
     fontSize: 14,
     color: C.error,
     flex: 1,
+  },
+  infoBox: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    backgroundColor: C.primaryBg,
+    borderRadius: 10,
+    padding: 12,
+    borderWidth: 1,
+    borderColor: C.primary + '40',
+  },
+  infoText: {
+    fontFamily: 'Outfit_400Regular',
+    fontSize: 14,
+    color: C.primary,
+    flex: 1,
+  },
+  forgotBtn: {
+    alignSelf: 'flex-end',
+    paddingVertical: 2,
+  },
+  forgotText: {
+    fontFamily: 'Outfit_500Medium',
+    fontSize: 14,
+    color: C.primary,
   },
   inputGroup: { gap: 8 },
   label: {

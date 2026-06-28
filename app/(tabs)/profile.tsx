@@ -377,14 +377,16 @@ export default function ProfileHubScreen() {
             <Text style={styles.actionBtnText}>{exportingCsv ? "Exporting..." : "Export CSV"}</Text>
           </Pressable>
 
-          <Pressable
-            style={({ pressed }) => [styles.actionBtn, pressed && { opacity: 0.85 }]}
-            onPress={onSeed}
-            disabled={seeding}
-          >
-            <Ionicons name="flask-outline" size={16} color={C.primary} />
-            <Text style={styles.actionBtnText}>{seeding ? "Seeding..." : "Seed Data"}</Text>
-          </Pressable>
+          {typeof __DEV__ !== "undefined" && __DEV__ ? (
+            <Pressable
+              style={({ pressed }) => [styles.actionBtn, pressed && { opacity: 0.85 }]}
+              onPress={onSeed}
+              disabled={seeding}
+            >
+              <Ionicons name="flask-outline" size={16} color={C.primary} />
+              <Text style={styles.actionBtnText}>{seeding ? "Seeding..." : "Seed Data"}</Text>
+            </Pressable>
+          ) : null}
 
           <Pressable
             style={({ pressed }) => [styles.actionBtn, styles.dangerBtn, pressed && { opacity: 0.85 }]}

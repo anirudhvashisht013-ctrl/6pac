@@ -164,8 +164,12 @@ export default function NutritionScreen() {
   const totalCarbs = meals.reduce((s, m) => s + (m.carbsG || 0), 0);
   const totalFat = meals.reduce((s, m) => s + (m.fatG || 0), 0);
 
+  // Allow navigating back through history (not just the last 3 days).
+  // Ordered today-first, then older dates, so today is visible without scrolling
+  // and scrolling right reveals progressively older days.
+  const PAST_DAYS_WINDOW = 30;
   const today = new Date(); // real Date object
-  const dateRange = [-2, -1, 0].map(d =>toYMD(addDays(today, d)));
+  const dateRange = Array.from({ length: PAST_DAYS_WINDOW }, (_, i) => toYMD(addDays(today, -i)));
 
   return (
     <View style={{ flex: 1, backgroundColor: C.bg }}>

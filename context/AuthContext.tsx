@@ -34,6 +34,7 @@ type OnboardingUpdates = {
   dateOfBirth: string;
   sex: "male" | "female" | "other";
   currentWeightKg: number;
+  heightCm: number;
   goalType: "lean" | "recomp" | "buffed";
 };
 

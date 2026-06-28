@@ -1,10 +1,10 @@
-import React, { useState, useCallback, useRef } from 'react';
+import React, { useState, useCallback } from 'react';
 import {
   View, Text, ScrollView, StyleSheet, Pressable,
   TextInput, Switch, ActivityIndicator, RefreshControl, Platform,
   Modal,
 } from 'react-native';
-import { useFocusEffect } from 'expo-router';
+import { useFocusEffect, router } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import * as Haptics from 'expo-haptics';
@@ -13,7 +13,7 @@ import { S } from '@/constants/spacing';
 import { useAuth } from '@/context/AuthContext';
 import { Streak } from '@/components/Streak';
 import { logsRepo, mealsRepo, targetsRepo, usersRepo } from '@/lib/storage';
-import { todayYMD, formatDateLong, getMondayYMD } from '@/lib/dates';
+import { todayYMD, formatDateLong, getMondayYMD, addDays, toYMD } from '@/lib/dates';
 import { generateWindow, DayWWSS, computeMaxStreakFromLogs, computeCurrentStreak } from '@/lib/streak';
 import { getUserProfile, updateUserProfile } from '@/lib/userProfile';
 import type { DailyLog, MealEntry, WeeklyTarget } from '@/lib/types';
@@ -21,7 +21,6 @@ import type { ISODate } from '@/lib/models';
 
 const WATER_GLASS_ML = 250;
 const DEFAULT_WATER_TARGET_ML = 2000;
-const DOUBLE_TAP_WINDOW_MS = 320;
 
 function MetricCard({
   icon, label, value, unit, onPress,
@@ -45,7 +44,15 @@ export default function TodayScreen() {
   const { user } = useAuth();
   const today = todayYMD();
 
+  // The day currently being viewed/edited. Defaults to today; can be moved back
+  // to surface previously logged days (data is already stored per date).
+  const [selectedDate, setSelectedDate] = useState<string>(today);
+  const isToday = selectedDate === today;
+
   const [log, setLog] = useState<DailyLog | null>(null);
+  // Today's log is tracked separately so the streak strip stays anchored to today
+  // even while viewing a past day.
+  const [todayLog, setTodayLog] = useState<DailyLog | null>(null);
   const [meals, setMeals] = useState<MealEntry[]>([]);
   const [target, setTarget] = useState<WeeklyTarget | null>(null);
   const [loading, setLoading] = useState(true);
@@ -62,7 +69,6 @@ export default function TodayScreen() {
   // stable human-readable label shown in the modal. Using this prevents
   // the modal label flickering if `editField` changes during async saves.
   const [editLabel, setEditLabel] = useState('');
-  const waterTapRef = useRef<Record<number, number>>({});
 
   const load = useCallback(async () => {
     if (!user) return;
@@ -77,20 +83,21 @@ export default function TodayScreen() {
     }
     setProfile(profileDoc);
 
-    // load today's basic pieces plus a slice of historical logs for streak
+    // load the selected day's basic pieces plus a slice of historical logs for streak
     const [l, m, t, allLogs] = await Promise.all([
-      logsRepo.getByDate(user.id, today),
-      mealsRepo.getByDate(user.id, today),
-      targetsRepo.getByWeek(user.id, getMondayYMD()),
+      logsRepo.getByDate(user.id, selectedDate),
+      mealsRepo.getByDate(user.id, selectedDate),
+      targetsRepo.getByWeek(user.id, getMondayYMD(selectedDate)),
       logsRepo.getAll(user.id),
     ]);
 
     setLog(l || {
-      date: today,
+      date: selectedDate,
       weightKg: null, sleepHours: null, waterMl: null, steps: null,
       supplementsTaken: null, caloriesManual: null, notes: null,
       updatedAt: new Date().toISOString(),
     });
+    setTodayLog(allLogs.find((x) => x.date === today) || null);
     setMeals(m);
     setTarget(t);
 
@@ -118,7 +125,7 @@ export default function TodayScreen() {
     }
 
     setLoading(false);
-  }, [user, today]);
+  }, [user, today, selectedDate]);
 
   useFocusEffect(useCallback(() => { load(); }, [load]));
 
@@ -131,6 +138,7 @@ export default function TodayScreen() {
 
     // refresh streak window for today / recent days (and filter by account start)
     const all = await logsRepo.getAll(user.id);
+    setTodayLog(all.find((x) => x.date === today) || null);
     const accountStart: ISODate = profile?.createdAt
       ? (profile.createdAt.toString().slice(0, 10) as ISODate)
       : today;
@@ -211,21 +219,32 @@ export default function TodayScreen() {
   const targetWaterGlasses = Math.max(1, Math.ceil(waterTargetMl / WATER_GLASS_ML));
   const waterGlassSlots = Math.max(targetWaterGlasses, activeWaterGlasses);
 
-  const onWaterGlassPress = async (index: number) => {
+  const onWaterGlassPress = async () => {
     if (saving) return;
-    const now = Date.now();
-    const lastTap = waterTapRef.current[index] || 0;
-    waterTapRef.current[index] = now;
-
-    if (index < activeWaterGlasses) {
-      if (now - lastTap <= DOUBLE_TAP_WINDOW_MS) {
-        await changeWaterBy(-WATER_GLASS_ML);
-      }
-      return;
-    }
-
     await changeWaterBy(WATER_GLASS_ML);
   };
+
+  const onWaterRemove = async () => {
+    if (saving || waterCurrentMl <= 0) return;
+    await changeWaterBy(-WATER_GLASS_ML);
+  };
+
+  const accountStartYMD = profile?.createdAt ? profile.createdAt.toString().slice(0, 10) : null;
+  const canGoPrev = !accountStartYMD || selectedDate > accountStartYMD;
+
+  const goPrevDay = () => {
+    if (!canGoPrev) return;
+    setSelectedDate(toYMD(addDays(new Date(`${selectedDate}T00:00:00`), -1)));
+  };
+  const goNextDay = () => {
+    if (isToday) return;
+    const next = toYMD(addDays(new Date(`${selectedDate}T00:00:00`), 1));
+    setSelectedDate(next > today ? today : next);
+  };
+
+  const headerTitle = isToday
+    ? 'Today'
+    : new Date(`${selectedDate}T00:00:00`).toLocaleDateString(undefined, { weekday: 'long' });
 
   if (loading) {
     return (
@@ -243,12 +262,12 @@ export default function TodayScreen() {
         refreshControl={<RefreshControl refreshing={loading} onRefresh={load} tintColor={C.primary} />}
         showsVerticalScrollIndicator={false}
       >
-        <Streak data={streakData} today={today} todayLog={log} />
+        <Streak data={streakData} today={today} todayLog={todayLog} />
 
         <View style={styles.headerRow}>
-          <View>
-            <Text style={styles.greeting}>Today</Text>
-            <Text style={styles.dateStr}>{formatDateLong(today)}</Text>
+          <View style={{ flex: 1 }}>
+            <Text style={styles.greeting}>{headerTitle}</Text>
+            <Text style={styles.dateStr}>{formatDateLong(selectedDate)}</Text>
           </View>
           {allMet && (
             <View style={styles.starBadge}>
@@ -258,24 +277,63 @@ export default function TodayScreen() {
           )}
         </View>
 
+        <View style={styles.dateNavRow}>
+          <Pressable
+            style={({ pressed }) => [
+              styles.dateNavBtn,
+              !canGoPrev && styles.dateNavBtnDisabled,
+              pressed && { opacity: 0.7 },
+            ]}
+            onPress={goPrevDay}
+            disabled={!canGoPrev}
+          >
+            <Ionicons name="chevron-back" size={18} color={canGoPrev ? C.textSecondary : C.textMuted} />
+          </Pressable>
+          <Pressable
+            style={({ pressed }) => [styles.dateNavToday, isToday && styles.dateNavTodayDisabled, pressed && { opacity: 0.7 }]}
+            onPress={() => setSelectedDate(today)}
+            disabled={isToday}
+          >
+            <Text style={[styles.dateNavTodayText, isToday && styles.dateNavTodayTextDisabled]}>
+              {isToday ? 'Viewing today' : 'Back to today'}
+            </Text>
+          </Pressable>
+          <Pressable
+            style={({ pressed }) => [
+              styles.dateNavBtn,
+              isToday && styles.dateNavBtnDisabled,
+              pressed && { opacity: 0.7 },
+            ]}
+            onPress={goNextDay}
+            disabled={isToday}
+          >
+            <Ionicons name="chevron-forward" size={18} color={isToday ? C.textMuted : C.textSecondary} />
+          </Pressable>
+        </View>
+
         <View style={styles.targetRow}>
           {[
-            { key: 'calories', icon: 'flame-outline', met: calMet, hasData: totalCalories > 0 },
-            { key: 'sleep', icon: 'moon-outline', met: sleepLogged, hasData: sleepLogged },
-            { key: 'steps', icon: 'footsteps-outline', met: stepsMet, hasData: !!log?.steps },
-            { key: 'water', icon: 'pint-outline', met: waterMet, hasData: !!log?.waterMl },
-            { key: 'weight', icon: 'scale-outline', met: weightLogged, hasData: weightLogged },
-          ].map(({ key, icon, met, hasData }) => (
-            <View key={key} style={[
-              styles.indicatorBadge,
-              met ? styles.indicatorMet : hasData ? styles.indicatorLogged : styles.indicatorEmpty,
-            ]}>
+            { key: 'calories', icon: 'flame-outline', met: calMet, hasData: totalCalories > 0, onPress: () => router.push('/(tabs)/nutrition') },
+            { key: 'sleep', icon: 'moon-outline', met: sleepLogged, hasData: sleepLogged, onPress: () => startEdit('sleepHours', log?.sleepHours) },
+            { key: 'steps', icon: 'footsteps-outline', met: stepsMet, hasData: !!log?.steps, onPress: () => startEdit('steps', log?.steps) },
+            { key: 'water', icon: 'pint-outline', met: waterMet, hasData: !!log?.waterMl, onPress: () => startEdit('waterMl', log?.waterMl) },
+            { key: 'weight', icon: 'scale-outline', met: weightLogged, hasData: weightLogged, onPress: () => startEdit('weightKg', log?.weightKg) },
+          ].map(({ key, icon, met, hasData, onPress }) => (
+            <Pressable
+              key={key}
+              onPress={onPress}
+              style={({ pressed }) => [
+                styles.indicatorBadge,
+                met ? styles.indicatorMet : hasData ? styles.indicatorLogged : styles.indicatorEmpty,
+                pressed && { opacity: 0.7 },
+              ]}
+            >
               <Ionicons
                 name={icon as any}
                 size={16}
                 color={met ? C.success : hasData ? C.textSecondary : C.textMuted}
               />
-            </View>
+            </Pressable>
           ))}
           {saving && <ActivityIndicator size="small" color={C.primary} style={{ marginLeft: 'auto' }} />}
         </View>
@@ -293,9 +351,23 @@ export default function TodayScreen() {
               <Ionicons name="pint-outline" size={16} color={C.primary} />
               <Text style={styles.waterCardTitle}>Water Intake</Text>
             </View>
-            <Text style={styles.waterCardValue}>
-              {waterCurrentMl.toLocaleString()} / {waterTargetMl.toLocaleString()} ml
-            </Text>
+            <View style={styles.waterValueRow}>
+              <Text style={styles.waterCardValue}>
+                {waterCurrentMl.toLocaleString()} / {waterTargetMl.toLocaleString()} ml
+              </Text>
+              <Pressable
+                onPress={() => { void onWaterRemove(); }}
+                disabled={saving || waterCurrentMl <= 0}
+                hitSlop={6}
+                style={({ pressed }) => [
+                  styles.waterMinusBtn,
+                  waterCurrentMl <= 0 && styles.waterMinusBtnDisabled,
+                  pressed && { opacity: 0.7 },
+                ]}
+              >
+                <Ionicons name="remove" size={18} color={waterCurrentMl <= 0 ? C.textMuted : C.primary} />
+              </Pressable>
+            </View>
           </View>
           <View style={styles.glassGrid}>
             {Array.from({ length: waterGlassSlots }).map((_, idx) => {
@@ -309,7 +381,7 @@ export default function TodayScreen() {
                     pressed && { opacity: 0.85 },
                   ]}
                   onPress={() => {
-                    void onWaterGlassPress(idx);
+                    void onWaterGlassPress();
                   }}
                 >
                   <Ionicons name="pint-outline" size={16} color={active ? C.primary : C.textMuted} />
@@ -317,7 +389,7 @@ export default function TodayScreen() {
               );
             })}
           </View>
-          <Text style={styles.waterHint}>Tap to add 250ml. Double-tap an active glass to remove 250ml.</Text>
+          <Text style={styles.waterHint}>Tap a glass to add 250ml. Tap the − button to remove 250ml.</Text>
         </View>
 
         <Pressable
@@ -440,6 +512,19 @@ const styles = StyleSheet.create({
     borderWidth: 1, borderColor: C.warning + '40',
   },
   starText: { fontFamily: 'Outfit_600SemiBold', fontSize: 12, color: C.warning },
+  dateNavRow: { flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 16 },
+  dateNavBtn: {
+    width: 36, height: 36, borderRadius: 10, alignItems: 'center', justifyContent: 'center',
+    borderWidth: 1, borderColor: C.border, backgroundColor: C.surface2,
+  },
+  dateNavBtnDisabled: { opacity: 0.45 },
+  dateNavToday: {
+    flex: 1, height: 36, borderRadius: 10, alignItems: 'center', justifyContent: 'center',
+    borderWidth: 1, borderColor: C.border, backgroundColor: C.surface2,
+  },
+  dateNavTodayDisabled: { opacity: 0.6 },
+  dateNavTodayText: { fontFamily: 'Outfit_500Medium', fontSize: 13, color: C.primary },
+  dateNavTodayTextDisabled: { color: C.textMuted },
   targetRow: { flexDirection: 'row', gap: 8, marginBottom: 24, alignItems: 'center' },
   indicatorBadge: {
     width: 36, height: 36, borderRadius: 10, alignItems: 'center', justifyContent: 'center', borderWidth: 1.5,
@@ -470,7 +555,22 @@ const styles = StyleSheet.create({
   waterCardTop: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', gap: 12 },
   waterCardTitleRow: { flexDirection: 'row', alignItems: 'center', gap: 6 },
   waterCardTitle: { fontFamily: 'Outfit_500Medium', fontSize: 14, color: C.textSecondary },
+  waterValueRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
   waterCardValue: { fontFamily: 'Outfit_600SemiBold', fontSize: 13, color: C.text },
+  waterMinusBtn: {
+    width: 28,
+    height: 28,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: C.primary,
+    backgroundColor: C.primaryBg,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  waterMinusBtnDisabled: {
+    borderColor: C.border,
+    backgroundColor: C.surface3,
+  },
   glassGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
   glassSlot: {
     width: 32,

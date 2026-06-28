@@ -30,7 +30,7 @@ export function Streak({ data, today: todayProp, todayLog }: StreakProps) {
   }, [data]);
 
   const message = useMemo(() => {
-    if (streakCount === 0) return "Start your streak today!";
+    if (streakCount === 0) return "Welcome! Log a metric to light up day one.";
     if (streakCount < 3) return "Good start - keep the streak going!";
     if (streakCount < 7) return "Nice work! Stay consistent.";
     return "Amazing streak! Keep it alive.";
@@ -113,8 +113,8 @@ export function Streak({ data, today: todayProp, todayLog }: StreakProps) {
     const todayColor = getTodayFireColor();
     return (
       <View style={styles.container}>
-        <Text style={styles.streakText}>No streak yet</Text>
-        <Text style={styles.messageText}>Start your streak today!</Text>
+        <Text style={styles.streakText}>Your streak starts today</Text>
+        <Text style={styles.messageText}>Welcome! Log a metric to light up day one.</Text>
         <View style={styles.scrollContent}>
           <Pressable
             onPress={handleTodayFirePress}
@@ -136,7 +136,7 @@ export function Streak({ data, today: todayProp, todayLog }: StreakProps) {
   return (
     <View style={styles.container}>
       <Text style={styles.streakText}>
-        {streakCount > 0 ? `${streakCount}-day streak` : "No streak yet"}
+        {streakCount > 0 ? `${streakCount}-day streak` : "Your streak starts today"}
       </Text>
       <Text style={styles.messageText}>{message}</Text>
       <ScrollView

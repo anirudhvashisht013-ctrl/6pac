@@ -13,6 +13,7 @@ import {
   mapGoogleAuthError,
   signInWithGoogleNative,
 } from '@/lib/auth/googleAuth';
+import { isValidEmail } from '@/lib/validation/email';
 
 export default function SignupScreen() {
   const insets = useSafeAreaInsets();
@@ -28,6 +29,10 @@ export default function SignupScreen() {
   const handleSignUp = async () => {
     if (!email.trim() || !password || !confirmPassword) {
       setError('Please fill in all fields');
+      return;
+    }
+    if (!isValidEmail(email)) {
+      setError('Enter a valid email address');
       return;
     }
     if (password.length < 6) {

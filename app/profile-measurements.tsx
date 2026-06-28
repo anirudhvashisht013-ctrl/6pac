@@ -410,6 +410,7 @@ export default function ProfileMeasurementsScreen() {
                           {trendLine("Chest", showEntry.chest, prev?.chest ?? null, "in")}
                           {trendLine("Shoulders", showEntry.shoulders, prev?.shoulders ?? null, "in")}
                           {trendLine("Arms R", showEntry.armsR, prev?.armsR ?? null, "in")}
+                          {trendLine("Arms L", showEntry.armsL, prev?.armsL ?? null, "in")}
                           {trendLine("Body Fat", showEntry.bodyFatPercent, prev?.bodyFatPercent ?? null, "pct")}
                         </View>
                       ) : (

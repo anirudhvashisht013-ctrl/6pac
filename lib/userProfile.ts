@@ -71,6 +71,7 @@ export async function markOnboardingDone(
     dateOfBirth: string;
     sex: "male" | "female" | "other";
     currentWeightKg: number;
+    heightCm: number;
     goalType: "lean" | "recomp" | "buffed";
   }
 ): Promise<void> {
@@ -85,6 +86,7 @@ export async function markOnboardingDone(
       dateOfBirth: data.dateOfBirth,
       sex: data.sex,
       currentWeightKg: data.currentWeightKg,
+      heightCm: data.heightCm,
       goalType: data.goalType,
       updatedAt: serverTimestamp(),
     } satisfies Partial<UserProfileDoc>,

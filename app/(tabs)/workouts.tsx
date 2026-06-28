@@ -48,7 +48,8 @@ export default function WorkoutsScreen() {
 
   useFocusEffect(useCallback(() => { load(); }, [load]));
 
-  const isWeekReady = !!schedule && schedule.days.every(d => d.status !== 'unplanned');
+  const unplannedCount = schedule ? schedule.days.filter(d => d.status === 'unplanned').length : 0;
+  const hasAnyPlannedDay = !!schedule && schedule.days.some(d => d.status !== 'unplanned');
   const todaySchedule = schedule?.days.find(d => d.date === today);
   const todayTemplate = todaySchedule?.workoutTemplateId
     ? templates.find(t => t.id === todaySchedule.workoutTemplateId) || null
@@ -193,26 +194,27 @@ export default function WorkoutsScreen() {
                 )}
               </View>
               <Text style={styles.todayCardBlocks}>{blockCount(todayTemplate)}</Text>
-              {!isWeekReady ? (
-                <View style={styles.lockedBanner}>
-                  <Ionicons name="lock-closed-outline" size={14} color={C.warning} />
-                  <Text style={styles.lockedText}>Plan entire week to unlock</Text>
-                </View>
-              ) : (
-                <Pressable
-                  style={({ pressed }) => [styles.startBtn, pressed && { opacity: 0.85 }]}
-                  onPress={() => startOrResumeWorkout(todayTemplate)}
-                >
-                  <Ionicons name="play" size={16} color={C.bg} />
-                  <Text style={styles.startBtnText}>
-                    {activeTodaySessionForTemplate(todayTemplate.id)
-                      ? 'Resume Workout'
-                      : hasCompletedTodaySession
-                        ? 'Start Again'
-                        : 'Start Workout'}
+              {unplannedCount > 0 ? (
+                <View style={styles.infoBanner}>
+                  <Ionicons name="information-circle-outline" size={14} color={C.textSecondary} />
+                  <Text style={styles.infoText}>
+                    {unplannedCount} unplanned day{unplannedCount !== 1 ? 's' : ''} this week
                   </Text>
-                </Pressable>
-              )}
+                </View>
+              ) : null}
+              <Pressable
+                style={({ pressed }) => [styles.startBtn, pressed && { opacity: 0.85 }]}
+                onPress={() => startOrResumeWorkout(todayTemplate)}
+              >
+                <Ionicons name="play" size={16} color={C.bg} />
+                <Text style={styles.startBtnText}>
+                  {activeTodaySessionForTemplate(todayTemplate.id)
+                    ? 'Resume Workout'
+                    : hasCompletedTodaySession
+                      ? 'Start Again'
+                      : 'Start Workout'}
+                </Text>
+              </Pressable>
             </View>
           </View>
         )}
@@ -254,10 +256,10 @@ export default function WorkoutsScreen() {
               </View>
               <View style={styles.templateRight}>
                 <Pressable
-                  style={({ pressed }) => [styles.playBtn, !isWeekReady && styles.playBtnDisabled, pressed && { opacity: 0.8 }]}
-                  onPress={() => isWeekReady && startOrResumeWorkout(t)}
+                  style={({ pressed }) => [styles.playBtn, !hasAnyPlannedDay && styles.playBtnDisabled, pressed && { opacity: 0.8 }]}
+                  onPress={() => hasAnyPlannedDay && startOrResumeWorkout(t)}
                 >
-                  <Ionicons name="play" size={14} color={isWeekReady ? C.bg : C.textMuted} />
+                  <Ionicons name="play" size={14} color={hasAnyPlannedDay ? C.bg : C.textMuted} />
                 </Pressable>
                 <Ionicons name="chevron-forward" size={16} color={C.textMuted} />
               </View>
@@ -288,11 +290,11 @@ const styles = StyleSheet.create({
   todayCardLeft: { flexDirection: 'row', alignItems: 'center', gap: 10 },
   todayCardName: { fontFamily: 'Outfit_700Bold', fontSize: 18, color: C.text },
   todayCardBlocks: { fontFamily: 'Outfit_400Regular', fontSize: 13, color: C.textMuted },
-  lockedBanner: {
+  infoBanner: {
     flexDirection: 'row', alignItems: 'center', gap: 8,
-    backgroundColor: C.warningBg, borderRadius: 8, padding: 10, borderWidth: 1, borderColor: C.warning + '40',
+    backgroundColor: C.surface3, borderRadius: 8, padding: 10, borderWidth: 1, borderColor: C.border,
   },
-  lockedText: { fontFamily: 'Outfit_500Medium', fontSize: 13, color: C.warning },
+  infoText: { fontFamily: 'Outfit_500Medium', fontSize: 13, color: C.textSecondary, flex: 1 },
   startBtn: {
     flexDirection: 'row', alignItems: 'center', gap: 8, justifyContent: 'center',
     height: 48, borderRadius: 12, backgroundColor: C.primary,

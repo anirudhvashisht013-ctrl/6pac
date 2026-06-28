@@ -1,0 +1,127 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>6Pac Visual Reference Pack</title>
+    <style>
+      :root {
+        color-scheme: dark;
+        font-family: Arial, Helvetica, sans-serif;
+        background: #0a0a0f;
+        color: #fff;
+      }
+      * { box-sizing: border-box; }
+      body { margin: 0; background: #0a0a0f; }
+      .cover, figure {
+        min-height: 100vh;
+        margin: 0;
+        padding: 28px;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        break-after: page;
+      }
+      .cover {
+        text-align: center;
+        gap: 12px;
+      }
+      h1 { margin: 0; font-size: 36px; }
+      .cover p { margin: 0; color: #a0a0b8; font-size: 16px; }
+      figcaption {
+        width: min(390px, 100%);
+        margin-bottom: 14px;
+        font-weight: 700;
+        font-size: 18px;
+      }
+      img {
+        display: block;
+        width: min(390px, 100%);
+        height: auto;
+        max-height: calc(100vh - 95px);
+        object-fit: contain;
+        border: 1px solid #2a2a3a;
+      }
+      @media print {
+        @page { size: A4 portrait; margin: 10mm; }
+        .cover, figure {
+          min-height: 277mm;
+          height: 277mm;
+          padding: 0;
+          break-after: page;
+        }
+        img {
+          width: auto;
+          max-width: 100%;
+          height: 248mm;
+          max-height: 248mm;
+        }
+        figcaption {
+          width: 100%;
+          margin-bottom: 4mm;
+          font-size: 14pt;
+          text-align: center;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <section class="cover">
+      <h1>6Pac Visual Reference Pack</h1>
+      <p>Current application UI • 390 × 844 px • 28 June 2026</p>
+      <p>34 rendered states covering entry, planning, training, nutrition, progress, settings, and failures.</p>
+    </section>
+    <main id="gallery"></main>
+    <script>
+      const screens = [
+        ["00-login.png", "00 — Login"],
+        ["01-sign-up.png", "01 — Sign up"],
+        ["02-onboarding-name.png", "02 — Onboarding: name"],
+        ["03-onboarding-date-of-birth.png", "03 — Onboarding: date of birth"],
+        ["04-onboarding-biological-sex.png", "04 — Onboarding: biological sex"],
+        ["05-onboarding-weight.png", "05 — Onboarding: weight"],
+        ["06-onboarding-height.png", "06 — Onboarding: height"],
+        ["07-onboarding-goal.png", "07 — Onboarding: goal"],
+        ["08-today-dashboard.png", "08 — Today dashboard"],
+        ["09-today-dashboard-lower.png", "09 — Today dashboard, lower"],
+        ["10-nutrition-dashboard.png", "10 — Nutrition dashboard"],
+        ["11-nutrition-add-meal.png", "11 — Add meal"],
+        ["12-weekly-plan.png", "12 — Weekly Plan"],
+        ["13-weekly-plan-schedule.png", "13 — Weekly schedule"],
+        ["14-weekly-plan-day-picker.png", "14 — Day-planning modal"],
+        ["15-weekly-targets-edit.png", "15 — Weekly targets"],
+        ["16-workouts-library.png", "16 — Workouts"],
+        ["17-workout-player-exercise.png", "17 — Workout player"],
+        ["18-workout-playlist.png", "18 — Live workout playlist"],
+        ["19-workout-template-editor.png", "19 — Edit workout"],
+        ["20-workout-template-new.png", "20 — New workout"],
+        ["21-profile-hub.png", "21 — Profile hub"],
+        ["22-profile-account-actions.png", "22 — Profile account actions"],
+        ["23-progress-dashboard.png", "23 — Progress"],
+        ["24-body-measurements.png", "24 — Body measurements"],
+        ["25-body-measurements-history.png", "25 — Body measurements history position"],
+        ["26-body-measurement-form.png", "26 — Body measurement form"],
+        ["27-exercise-library.png", "27 — Exercise library"],
+        ["28-exercise-create-form.png", "28 — New exercise"],
+        ["29-reminders-settings.png", "29 — Reminder settings"],
+        ["30-reminders-settings-lower.png", "30 — Reminder settings, lower"],
+        ["31-edit-profile.png", "31 — Edit profile"],
+        ["32-friends-dashboard.png", "32 — Friends blocking failure"],
+        ["33-auth-config-failure.png", "33 — Authentication configuration failure"],
+      ];
+
+      const gallery = document.querySelector("#gallery");
+      for (const [file, title] of screens) {
+        const figure = document.createElement("figure");
+        const caption = document.createElement("figcaption");
+        const image = document.createElement("img");
+        caption.textContent = title;
+        image.src = `screens/${file}`;
+        image.alt = title;
+        figure.append(caption, image);
+        gallery.append(figure);
+      }
+    </script>
+  </body>
+</html>

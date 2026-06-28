@@ -40,3 +40,6 @@ yarn-error.*
 .vercel
 
 .env
+
+# local-only state (Replit agent state, scratch screenshots, etc.)
+.local/
